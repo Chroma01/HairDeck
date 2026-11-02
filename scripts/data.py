@@ -83,6 +83,7 @@ import numpy as np
 RELEASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RELEASE)
 from hairdeck import paths  # noqa: E402
+from hairdeck.blender_runtime import blender_env  # noqa: E402
 from hairdeck.cards.codec import hair_features  # noqa: E402
 from hairdeck.cards.extract import pack, work  # noqa: E402
 from hairdeck.cards.packed import Packed  # noqa: E402
@@ -276,7 +277,7 @@ def render_split(split, workers):
     print(f'renders {split}: {len(todo)} of {len(items)} characters in {n} Blender processes -> {out}', flush=True)
     for sub in ('_shards', '_logs'):
         os.makedirs(os.path.join(out, sub), exist_ok=True)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
+    env = blender_env(dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
     lock, seen = threading.Lock(), [0, 0]
 
     def count(failed):

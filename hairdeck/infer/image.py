@@ -13,7 +13,7 @@ Stages:
 
 Use:
   P = Pipeline()                                    # loads SAM 3, BiRefNet-matting, DINOv3, the image DiT, the card VAE
-  r = P.run(image, seed=0, steps=50, cfg=2.0)       #   and the chain DiT once (about 7 GB of GPU memory)
+  r = P.run(image, seed=0, steps=50, cfg=2.0)       #   and the chain DiT once; HAIRDECK_OFFLOAD controls residency
   r['ok'], r['message'], r['prep_vis'], r['model_input'], r['timings'], r['out_dir'],
   r['samples'][k]: 'cards', 'n_cards', 'chains', 'n_chains', 'glb' (cards + head), 'glb_nohead', 'glb_chains',
   'glb_nohead_chains', 'json', 'chains_json'
@@ -43,6 +43,7 @@ from ..sampling.flow import fm_sample
 from ..spring.chaindit import ChainDiT, chain_stats, decode as chain_decode
 from .glb import chain_trimesh, hair_color, hair_trimesh, head_trimesh, write_glb
 from .panel import prep_panel
+from .memory import ModelResidency, managed_request
 
 IMAGE_DIT = ('image_model', 'model.safetensors')  # under paths.ckpt(): the released image model
 CHAIN_DIT = ('chain_model', 'model.safetensors')  # the released chain model (head frame)
@@ -119,24 +120,28 @@ def load_image(image, want_path=False):
 
 
 class Pipeline:
-    def __init__(self, ckpt=None, chain_ckpt=None, device='cuda', preprocessor=None, chains=True, out_root=None):
+    def __init__(self, ckpt=None, chain_ckpt=None, device='cuda', preprocessor=None, chains=True, out_root=None,
+                 offload=None):
         """ckpt / chain_ckpt: the image DiT and the chain DiT (default: IMAGE_DIT and CHAIN_DIT under paths.ckpt());
         preprocessor: any callable with Preprocessor's call and result (default: Preprocessor('best')); out_root: where
-        run() puts a result without an out_dir (default results/image_to_hair)"""
+        run() puts a result without an out_dir (default results/image_to_hair);
+        offload: auto/on/off, otherwise HAIRDECK_OFFLOAD (Windows auto, Linux off)."""
         self.dev = device
         self.out_root = out_root or paths.results('image_to_hair')
         t0 = time.time()
+        self.residency = ModelResidency(device, offload, zero_gpu=ZERO_GPU)
+        initial_device = self.residency.initial_device
         ckpt = ckpt or paths.ckpt(*IMAGE_DIT)
-        self.preprocessor = preprocessor or Preprocessor('best')
+        self.preprocessor = preprocessor or Preprocessor('best', residency=self.residency)
         ck = load_ckpt(ckpt)
         a = argparse_ns(ck['args'])
         assert a.rep == 'rgb', a.rep
         self.a = a
         self.tok = LatentTokenizer(json.load(open(paths.data('token_stats_head.json'))),
                                    json.load(open(paths.ckpt(a.vae, 'latent_stats_head.json'))), device=device)
-        self.enc = DinoEncoder(a.dino, a.res).to(device)
+        self.enc = DinoEncoder(a.dino, a.res).to(initial_device)
         self.model = ImgSetDiT(self.tok.dim, a.dim, a.depth, a.heads, enc_dim=self.enc.dim,
-                               n_ctx=self.enc.n_tokens).to(device).eval()
+                               n_ctx=self.enc.n_tokens).to(initial_device).eval()
         self.model.load_state_dict(ck['ema'])
         del ck
         self.vae = LatentDecoder(paths.ckpt(a.vae), device)
@@ -148,14 +153,15 @@ class Pipeline:
                 cc = load_ckpt(chain_ckpt or paths.ckpt(*CHAIN_DIT))
                 ca = argparse_ns(cc['args'])
                 assert ca.vae == a.vae, (ca.vae, a.vae)  # the same card token space
-                net = ChainDiT(cc['dim'], ca.dim, ca.depth, ca.heads).to(device).eval()
+                net = ChainDiT(cc['dim'], ca.dim, ca.depth, ca.heads).to(initial_device).eval()
                 net.load_state_dict(cc['ema'])
                 self.chain_dim, self.chain_stats, self.chain_decode = cc['dim'], chain_stats(), chain_decode
                 self.chain = net  # set last: a failure above leaves chains off instead of half loaded
             except Exception as e:  # the pipeline works without chains
                 self.chain_error = f'{type(e).__name__}: {e}'
+        self.residency.register('generation', self.enc, self.model, self.vae.vae.model, self.chain)
         if not ZERO_GPU:  # ZeroGPU: models are placed on cuda while no real GPU is attached (CUDA emulation)
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(self.dev)
         self.load_sec = round(time.time() - t0, 1)
 
     # ------------------------------------------------------------ stages
@@ -178,6 +184,7 @@ class Pipeline:
 
     def sample(self, crop, x0, steps, cfg):
         """-> (cards, raw card tokens (1, 192, 40))"""
+        self.residency.activate('generation')
         img = torch.from_numpy(crop.copy()).permute(2, 0, 1)[None].to(self.dev)
         with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
             ctx = self.model.encode_cond(self.enc(img))
@@ -187,6 +194,7 @@ class Pipeline:
     def chains(self, x, seed, cfg=2.0, steps=50):
         """Spring-bone chains for generated card tokens x: the chain DiT, Euler 50, CFG 2, its own generator seeded with
         the card seed, head frame -> list of dict(path, joints, n_joints, stiffness)."""
+        self.residency.activate('generation')
         g = torch.Generator(device=self.dev).manual_seed(int(seed))
         with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
             ctx = self.chain.encode_cond(clean_tokens(self.tok, x.float()))
@@ -194,6 +202,7 @@ class Pipeline:
         return self.chain_decode(xc[0].float().cpu().numpy(), self.chain_stats)
 
     # ------------------------------------------------------------ one request
+    @managed_request
     def add_chains(self, out_dir, seed):
         """Chains for a saved result that was generated without them (tokens_seed{s}.npy, cards_seed{s}.json and
         info.json in out_dir): writes chains_seed{s}.json and the two *_chains.glb files, updates info.json and returns
@@ -221,12 +230,13 @@ class Pipeline:
         os.replace(f'{out_dir}/info.json.tmp', f'{out_dir}/info.json')
         return smp
 
+    @managed_request
     def run(self, image, seed=0, steps=50, cfg=2.0, n_samples=1, out_dir=None, x0=None, write=True, chains=True, prep=None):
         """image: path, PIL image or (H, W, 3|4) uint8 array; n_samples variations with the seeds seed, seed + 1, ... (at
         most 4); out_dir (default <out_root>/<time>_<id>) gets the files listed in the module docstring;
         prep: another preprocessor for this call"""
         T = {}
-        sync = torch.cuda.synchronize
+        sync = lambda: torch.cuda.synchronize(self.dev)
         t_all = time.time()
         rgb, alpha, size_note, src = load_image(image, want_path=True)
         backend = prep or self.preprocessor
@@ -326,6 +336,7 @@ class Pipeline:
         return self._finish(res, t_all)
 
     def _finish(self, res, t_all):
+        res['memory'] = self.residency.report()
         T = res['timings']
         T['total'] = time.time() - t_all
         res['timings'] = {k: round(v, 3) for k, v in T.items()}

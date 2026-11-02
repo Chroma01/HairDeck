@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 import vrm_hair as E  # noqa: E402
 import vrm_scene as V  # noqa: E402
 from hairdeck.vrm import body as B  # noqa: E402
+from hairdeck.process import process_alive  # noqa: E402
 
 
 def log(*a):
@@ -90,9 +91,7 @@ def main():
     while True:
         if os.path.exists(f'{jobs}/stop'):
             break
-        try:
-            os.kill(parent, 0)
-        except OSError:
+        if not process_alive(parent):
             log('parent', parent, 'gone')
             break
         todo = sorted(glob.glob(f'{jobs}/*.json'))

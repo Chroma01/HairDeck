@@ -14,6 +14,11 @@
 
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong> · <a href="README_ja.md">日本語</a></p>
 
+## 🔥 Updates
+
+- **[2026.11.02]** 🎉 原生 Windows 支持已上线！可运行本地 Gradio、导出 VRM，并使用自动模型 offload。[开始使用](docs/windows.md)。
+- **[2026.10.30]** 🎉 HairDeck 正式发布！[代码](https://github.com/hyz317/HairDeck)和[模型权重](https://huggingface.co/hyz317/HairDeck)已开源，[在线 Demo](https://huggingface.co/spaces/hyz317/HairDeck)已上线。
+
 <a name="video"></a>
 
 ## 演示视频
@@ -40,7 +45,11 @@ https://github.com/user-attachments/assets/3eec4de5-ed21-4b75-b7d7-4bd599cbfeb2
 
 ### 🛠️ 安装
 
-运行需要 Linux x86-64、Python 3.12 和一张支持 CUDA 的 NVIDIA 显卡。我们在 PyTorch 2.8、CUDA 12.8 环境下做了测试。生成预览视频还需要安装 `ffmpeg`，并将它加入 `PATH`。
+HairDeck 支持 Linux 和原生 Windows，使用 NVIDIA CUDA GPU，环境为 Python 3.12、PyTorch 2.8 和 CUDA 12.8。
+
+**Windows：** 按 [Windows 指南](docs/windows.md)安装环境并启动 Gradio。
+
+**Linux：** 运行下面的命令安装依赖，并将 `ffmpeg` 加入 `PATH`。
 
 ```bash
 git clone https://github.com/hyz317/HairDeck.git
@@ -56,7 +65,7 @@ python -m pip install --no-deps pyrender==0.1.45  # without its old PyOpenGL pin
 
 ### 🤗 模型权重
 
-模型权重和配套文件可以从 [hyz317/HairDeck](https://huggingface.co/hyz317/HairDeck) 下载。下载 SAM 3 和 DINOv3 前，需要先到 [facebook/sam3](https://huggingface.co/facebook/sam3) 和 [facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m) 页面接受许可条款，再登录 Hugging Face（国内可考虑从 ModelScope 下载）：
+模型权重和配套文件可以从 [hyz317/HairDeck](https://huggingface.co/hyz317/HairDeck) 下载。下载 SAM 3 和 DINOv3 前，需要先到 [facebook/sam3](https://huggingface.co/facebook/sam3) 和 [facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m) 页面接受许可条款，再登录 Hugging Face：
 
 ```bash
 hf auth login
@@ -64,7 +73,15 @@ export HAIRDECK_ROOT=/path/to/workspace  # checkpoints, data, third-party weight
 python scripts/setup/download_weights.py
 ```
 
-脚本会下载 HairDeck 权重、图像预处理和编码所需的模型、配套数据，以及 Blender 4.2 LTS 和 VRM Add-on。Blender 默认下载 Linux x86-64 版本。
+也可以从 ModelScope 下载 SAM 3 和 DINOv3：
+
+```bash
+python scripts/setup/download_weights.py --gated-source modelscope
+```
+
+两种下载方式使用相同的权重校验值。
+
+脚本会下载 HairDeck 权重、图像预处理和编码所需的模型、配套数据，以及 Blender 4.2 LTS 和 VRM Add-on。Blender 会根据操作系统下载对应版本。
 
 如果已安装 Blender 4.2 LTS 并启用了 VRM Add-on，将 `HAIRDECK_BLENDER` 设为它的启动命令即可。
 
@@ -140,7 +157,7 @@ results/my_character/character/
 
 ## 📊 测试集评估
 
-先下载评估所需的数据和模型，再运行点云和骨骼链两项测试。每项测试都会用随机种子 0、1、2 生成结果，打印论文中的评估指标，并将每个样本的结果和平均值写入 `eval.json`。
+在 Linux 下下载评估所需的数据和模型，再运行点云和骨骼链两项测试。每项测试都会用随机种子 0、1、2 生成结果，打印论文中的评估指标，并将每个样本的结果和平均值写入 `eval.json`。
 
 ```bash
 python scripts/setup/download_weights.py --only test_data charm_test_pc dora
@@ -155,7 +172,7 @@ python scripts/test.py chains --cards results/pointcloud     # On the point-clou
 
 ## 🏋️ 训练
 
-准备好 CHARM 数据集和对应角色的 VRM 文件后，依次运行：
+在 Linux 下准备好 CHARM 数据集和对应角色的 VRM 文件后，依次运行：
 
 ```bash
 python scripts/setup/download_weights.py --only dora test_data charm_test_pc
@@ -164,7 +181,7 @@ bash scripts/train/launch_vae.sh
 bash scripts/train/launch_pc_dit.sh && bash scripts/train/launch_img_dit.sh && bash scripts/train/launch_chain_dit.sh
 ```
 
-训练结果保存在 `ckpt/train_*`，与下载的预训练权重分开存放。当前图像训练代码包含 synthetic appearance augmentation。已发布的图像模型还使用了一批经过风格化处理的渲染图像进行训练。
+训练结果保存在 `ckpt/train_*`，与下载的预训练权重分开存放。当前图像训练代码包含 synthetic appearance augmentation。
 
 <a name="citation"></a>
 

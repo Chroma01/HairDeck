@@ -24,7 +24,9 @@ def _load_module(path, name):
 
 
 class BiRefNet:
-    def __init__(self, name='birefnet_matting', size=1024):
+    def __init__(self, name='birefnet_matting', size=1024, device='cuda', inference_device=None):
+        # Model storage may start on CPU; small buffers and inputs use the selected GPU.
+        self.device = torch.device(device if inference_device is None else inference_device)
         code_dir = paths.weights(name)
         pkg = f'birefnet_pkg_{name}'  # birefnet.py does `from .BiRefNet_config import ...`
         sys.modules[pkg] = types.ModuleType(pkg)
@@ -36,22 +38,22 @@ class BiRefNet:
         sd = load_file(f'{code_dir}/model.safetensors')
         missing, unexpected = self.net.load_state_dict(sd, strict=False)
         assert not missing and not unexpected, (missing[:5], unexpected[:5])
-        self.net.eval().cuda().half()
+        self.net.eval().to(device).half()
         self.size = size
-        self.mean = torch.tensor([0.485, 0.456, 0.406], device='cuda').view(1, 3, 1, 1)
-        self.std = torch.tensor([0.229, 0.224, 0.225], device='cuda').view(1, 3, 1, 1)
+        self.mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
+        self.std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
 
     @torch.no_grad()
     def __call__(self, rgb):
         h0, w0 = rgb.shape[:2]
-        t = torch.from_numpy(rgb).cuda().permute(2, 0, 1)[None].float() / 255
+        t = torch.from_numpy(rgb).to(self.device).permute(2, 0, 1)[None].float() / 255
         t = F.interpolate(t, (self.size, self.size), mode='bilinear', align_corners=False)
         t = ((t - self.mean) / self.std).half()
         a = self.net(t)[-1].sigmoid().float()
         return F.interpolate(a, (h0, w0), mode='bilinear', align_corners=False)[0, 0]
 
 
-def build(name, size):
+def build(name, size, device='cuda', inference_device=None):
     if name != 'birefnet_matting':
         raise ValueError(f'matting model {name!r}: the release has birefnet_matting only')
-    return BiRefNet(name, size or 1024)
+    return BiRefNet(name, size or 1024, device=device, inference_device=inference_device)

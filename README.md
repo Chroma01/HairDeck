@@ -14,6 +14,11 @@
 
 <p align="center"><strong>English</strong> · <a href="README_zh-CN.md">简体中文</a> · <a href="README_ja.md">日本語</a></p>
 
+## 🔥 Updates
+
+- **[2026.11.02]** 🎉 Windows support is here! Run HairDeck with local Gradio, VRM export and automatic model offload. [Get started](docs/windows.md).
+- **[2026.10.30]** 🎉 HairDeck is released! [Code](https://github.com/hyz317/HairDeck), [model weights](https://huggingface.co/hyz317/HairDeck) and the [online demo](https://huggingface.co/spaces/hyz317/HairDeck) are available.
+
 <a name="video"></a>
 
 ## Video
@@ -42,8 +47,11 @@ The generated hairstyle can be exported as a GLB mesh or attached to an avatar a
 
 ### 🛠️ Installation
 
-Use Linux x86-64, Python 3.12 and one NVIDIA CUDA GPU. The release was tested with PyTorch 2.8 and CUDA 12.8.
-The video preview also needs `ffmpeg` on your `PATH`.
+HairDeck runs on Linux and native Windows with an NVIDIA CUDA GPU, Python 3.12, PyTorch 2.8 and CUDA 12.8.
+
+**Windows:** Follow [Windows setup](docs/windows.md) to install the environment and launch Gradio.
+
+**Linux:** Install the dependencies below and make `ffmpeg` available on your `PATH`.
 
 ```bash
 git clone https://github.com/hyz317/HairDeck.git
@@ -69,8 +77,10 @@ export HAIRDECK_ROOT=/path/to/workspace  # checkpoints, data, third-party weight
 python scripts/setup/download_weights.py
 ```
 
+Chinese users can refer to the [Chinese README](README_zh-CN.md#model-weights) for download instructions.
+
 The downloader sets up the HairDeck checkpoints, preprocessing and image-encoder weights, supporting data,
-and Blender 4.2 LTS with the VRM Add-on. The default Blender download is for Linux x86-64.
+and Blender 4.2 LTS with the VRM Add-on. The downloader selects the Blender build for your operating system.
 To use an existing Blender 4.2 LTS installation with the VRM Add-on enabled, set `HAIRDECK_BLENDER` to its command.
 
 The default workspace layout is:
@@ -145,7 +155,7 @@ Other variations use their corresponding seed in the filename. The chains file i
 
 ## 📊 Test-set evaluation
 
-Download the evaluation assets, then run the point-cloud and chain tests. Each test samples seeds 0, 1 and 2,
+On Linux, download the evaluation assets, then run the point-cloud and chain tests. Each test samples seeds 0, 1 and 2,
 prints the corresponding paper metrics, and saves per-sample results and their means in `eval.json`.
 
 ```bash
@@ -161,7 +171,7 @@ Evaluation paths such as `results/pointcloud` follow the workspace layout under 
 
 ## 🏋️ Training
 
-Start from the CHARM dataset and the characters' VRM files:
+On Linux, start from the CHARM dataset and the characters' VRM files:
 
 ```bash
 python scripts/setup/download_weights.py --only dora test_data charm_test_pc
@@ -170,9 +180,7 @@ bash scripts/train/launch_vae.sh
 bash scripts/train/launch_pc_dit.sh && bash scripts/train/launch_img_dit.sh && bash scripts/train/launch_chain_dit.sh
 ```
 
-The launchers write to `ckpt/train_*`, separately from the downloaded checkpoints. The current image-training
-recipe includes synthetic appearance augmentation; the restyled-render pool used for the released image model
-is not included in this release.
+The launchers write to `ckpt/train_*`, separately from the downloaded checkpoints. The image-training recipe includes synthetic appearance augmentation.
 
 <a name="citation"></a>
 

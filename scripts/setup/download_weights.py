@@ -13,7 +13,7 @@ evaluation into the workspace root (hairdeck.paths), each file checked against i
   dinov3_src  the DINOv3 code (torch.hub), facebookresearch/dinov3 at a fixed commit -> third_party/dinov3_src
   dinov3      DINOv3 ViT-L/16 LVD-1689M (DINOv3 License), Hugging Face facebook/dinov3-vitl16-pretrain-lvd1689m
               model.safetensors at a fixed revision -> weights/dinov3/; a gated repository like facebook/sam3
-  blender     Blender 4.2.23 LTS (Linux x64, GPL) from download.blender.org -> third_party/blender/, the wrapper bl.sh,
+  blender     Blender 4.2.23 LTS (Linux/Windows x64, GPL) from download.blender.org -> third_party/blender/,
               and the VRM Add-on for Blender 4.10.2 (GitHub release) installed into its own user extensions folder
 Not in the default, for the test-set evaluation (scripts/test.py):
   test_data      the evaluation data of the test set from --repo (the files of the test_data entry of config.json,
@@ -33,20 +33,25 @@ converted file; blender: the unpacked build when DIR has no archive, unchecked l
 where hairdeck.paths reads them (HAIRDECK_DATA, HAIRDECK_CKPT and HAIRDECK_WEIGHTS apply).
 """
 import argparse
+import contextlib
 import hashlib
 import http.client
 import json
 import os
 import shutil
+import stat
 import ssl
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.request
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from hairdeck import paths  # noqa: E402
+from hairdeck.blender_runtime import BUILDS, blender_build, blender_env  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RELEASE = os.path.dirname(os.path.dirname(HERE))
@@ -61,8 +66,12 @@ SOURCES = {'sam3_src': ('facebookresearch/sam3', '0570b3a5be9c4e694f23d85232fb55
            'dinov3_src': ('facebookresearch/dinov3', '6876159a11b4df116f30f667f8c9888617df0751', 'dinov3_src')}
 DINOV3 = ('facebook/dinov3-vitl16-pretrain-lvd1689m', 'ea8dc2863c51be0a264bab82070e3e8836b02d51', 'model.safetensors',
           'dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179')
-BLENDER = ('https://download.blender.org/release/Blender4.2/blender-4.2.23-linux-x64.tar.xz',
-           'bea0eb3146be13eae6225409a117b215184f41b7f79e799f97cb3abb8f6dc404', 'blender-4.2.23-linux-x64')
+# Optional mirrors of the same bytes, checked against SAM3/DINOV3 above.
+MODELSCOPE_REVISIONS = {
+    'facebook/sam3': 'f8ee5d16d5c30d0e87b1d22cbd358ce97761df56',
+    'facebook/dinov3-vitl16-pretrain-lvd1689m': 'bab39f7f4023c45534a5326e9378edc5b2016e48',
+}
+BLENDER = BUILDS['linux'][:3]  # legacy Linux archive tuple; get_blender selects the current platform
 VRM_ADDON = ('https://github.com/saturday06/VRM-Addon-for-Blender/releases/download/v4.10.2/'
              'VRM_Addon_for_Blender-Extension-4_10_2.zip',
              '228e622d158fbbf070b1b49547708f360a223873f00fa81a42170794492e6db9')
@@ -133,26 +142,53 @@ def url_get(url, dst, want=None, tries=3):
     return dst
 
 
-LAYOUT = (('data', 'data'), ('ckpt', 'ckpt'), ('weights', os.path.join('third_party', 'weights')))
+LAYOUT = (('data', 'data'), ('ckpt', 'ckpt'), ('weights', 'third_party/weights'))
+
+
+def repo_parts(rel):
+    """Validate a portable relative filename before mapping it to the local filesystem."""
+    parts = str(rel).replace('\\', '/').split('/')
+    if any(p in ('', '.', '..') or ':' in p for p in parts):
+        raise ValueError(f'not a relative repository filename: {rel!r}')
+    return parts
 
 
 def dst_of(rel):
     """The local file of rel, a path in the workspace layout (that of the model repository and of --from: data/...,
     ckpt/..., third_party/weights/..., the rest under the root), where hairdeck.paths reads it (HAIRDECK_DATA,
     HAIRDECK_CKPT and HAIRDECK_WEIGHTS apply)."""
+    parts = repo_parts(rel)
+    logical = '/'.join(parts)
     for key, base in LAYOUT:
-        if rel.startswith(base + os.sep):
-            return os.path.join(paths.get(key), rel[len(base) + 1:])
-    return paths.root(rel)
+        if logical.startswith(base + '/'):
+            return os.path.join(paths.get(key), *logical[len(base) + 1:].split('/'))
+    return paths.root(*parts)
 
 
 def rel_of(dst):
     """The layout path of a local file (dst_of inverted): the file to take from a --from workspace."""
     for key, base in LAYOUT:
-        d = paths.get(key).rstrip(os.sep)
-        if dst.startswith(d + os.sep):
-            return os.path.join(base, dst[len(d) + 1:])
-    return os.path.relpath(dst, paths.get('root'))
+        try:
+            rel = os.path.relpath(dst, paths.get(key)).replace('\\', '/')
+        except ValueError:  # Windows paths on different drives
+            continue
+        if rel == '.':
+            return base
+        if rel != '..' and not rel.startswith('../'):
+            return base + '/' + rel
+    return os.path.relpath(dst, paths.get('root')).replace('\\', '/')
+
+
+def hub_local_dir(file, dst):
+    """Use the destination tree directly only when it ends in the complete Hub filename."""
+    parts = repo_parts(file)
+    tail = os.path.join(*parts)
+    target = os.path.normpath(dst)
+    if os.path.normcase(target).endswith(os.sep + os.path.normcase(tail)):
+        for _ in parts:
+            target = os.path.dirname(target)
+        return target
+    return None
 
 
 def hub_get(repo, file, dst, want=None, revision=None, fresh=False):
@@ -163,11 +199,18 @@ def hub_get(repo, file, dst, want=None, revision=None, fresh=False):
         return dst
     from huggingface_hub import hf_hub_download
     log('hub', repo, file, revision or '')
-    got = hf_hub_download(repo, file, revision=revision,
-                          local_dir=dst[:-len(file)] if dst.endswith(os.sep + file) else paths.get('root'))
-    if os.path.abspath(got) != os.path.abspath(dst):
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.move(got, dst)
+    file = '/'.join(repo_parts(file))
+    directory = hub_local_dir(file, dst)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    # Overrides can place a manifest path outside its original tree. Stage beside
+    # the target instead of moving a possibly shared cache file or polluting ROOT.
+    where = (contextlib.nullcontext(directory) if directory is not None else
+             tempfile.TemporaryDirectory(prefix='.hairdeck-download-', dir=os.path.dirname(dst)))
+    with where as directory:
+        got = hf_hub_download(repo, file, revision=revision, local_dir=directory)
+        if os.path.normcase(os.path.abspath(got)) != os.path.normcase(os.path.abspath(dst)):
+            shutil.copyfile(got, dst + '.part')
+            os.replace(dst + '.part', dst)
     check(dst, want)
     return dst
 
@@ -177,7 +220,7 @@ def local_get(src_root, rel, dst, want=None, fresh=False):
         log('present', dst)
         return dst
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copyfile(os.path.join(src_root, rel), dst + '.part')
+    shutil.copyfile(os.path.join(src_root, *repo_parts(rel)), dst + '.part')
     os.replace(dst + '.part', dst)
     check(dst, want)
     log('copied', rel)
@@ -266,10 +309,10 @@ def get_birefnet(root, a):
 def get_sam3(root, a):
     repo, f, want = SAM3
     dst = paths.weights('sam3', f)
-    (local_get(a.src, rel_of(dst), dst, want) if a.src else hub_get(repo, f, dst, want))
+    (local_get(a.src, rel_of(dst), dst, want) if a.src else gated_get(a, repo, f, dst, want))
     if not a.src:
         try:
-            hub_get(repo, 'LICENSE', paths.weights('sam3', 'LICENSE'))
+            gated_get(a, repo, 'LICENSE', paths.weights('sam3', 'LICENSE'))
         except Exception as e:  # noqa: BLE001
             log('SAM 3 LICENSE not fetched:', e)
 
@@ -304,31 +347,70 @@ def get_source(root, a, item):
 def get_dinov3(root, a):
     repo, rev, f, want = DINOV3
     dst = paths.weights('dinov3', f)
-    (local_get(a.src, rel_of(dst), dst, want) if a.src else hub_get(repo, f, dst, want, revision=rev))
+    (local_get(a.src, rel_of(dst), dst, want) if a.src else gated_get(a, repo, f, dst, want, revision=rev))
     if not a.src:
         try:
-            hub_get(repo, 'LICENSE.md', paths.weights('dinov3', 'LICENSE.md'), revision=rev)
+            gated_get(a, repo, 'LICENSE.md', paths.weights('dinov3', 'LICENSE.md'), revision=rev)
         except Exception as e:  # noqa: BLE001
             log('DINOv3 LICENSE.md not fetched:', e)
 
 
+def gated_get(a, repo, filename, dst, want=None, revision=None):
+    """Select an explicit mirror without changing files or the default Hub behavior."""
+    if getattr(a, 'gated_source', 'huggingface') == 'modelscope':
+        commit = MODELSCOPE_REVISIONS[repo]
+        url = f'https://modelscope.cn/api/v1/models/{repo}/repo?Revision={commit}&FilePath={filename}'
+        return url_get(url, dst, want)
+    return hub_get(repo, filename, dst, want, revision=revision)
+
+
+def extract_zip(archive, directory):
+    """Extract a verified Windows build without allowing traversal or archive symlinks."""
+    base = os.path.realpath(directory)
+    with zipfile.ZipFile(archive) as z:
+        members = []
+        for info in z.infolist():
+            parts = repo_parts(info.filename.rstrip('/'))
+            target = os.path.join(base, *parts)
+            if os.path.commonpath([base, os.path.realpath(target)]) != base or stat.S_ISLNK(info.external_attr >> 16):
+                raise ValueError(f'unsafe ZIP member: {info.filename!r}')
+            members.append((info, target))
+        for info, target in members:
+            if info.is_dir():
+                os.makedirs(target, exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with z.open(info) as src, open(target, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+
+
 def get_blender(root, a):
-    url, want, top = BLENDER
+    if os.environ.get('HAIRDECK_BLENDER', '').strip():
+        log('using HAIRDECK_BLENDER; skipped managed Blender install. Enable the VRM Add-on in that Blender first.')
+        return
+    url, want, top, executable = blender_build()
     B = os.path.join(root, 'third_party', 'blender')
     os.makedirs(B, exist_ok=True)
-    if not os.path.isfile(os.path.join(B, top, 'blender')):
-        tar = os.path.join(B, os.path.basename(url))
+    binary = os.path.join(B, top, executable)
+    if not os.path.isfile(binary):
+        archive = os.path.join(B, os.path.basename(url))
         src_build = os.path.join(a.src, 'third_party', 'blender', top) if a.src else ''
-        if a.src and not os.path.isfile(os.path.join(a.src, os.path.relpath(tar, root))) and os.path.isdir(src_build):
+        if a.src and not os.path.isfile(os.path.join(a.src, os.path.relpath(archive, root))) and os.path.isdir(src_build):
             log('copy', src_build)  # an installed workspace keeps the unpacked build, not the archive
-            shutil.copytree(src_build, os.path.join(B, top), symlinks=True)
+            shutil.copytree(src_build, os.path.join(B, top), symlinks=executable != 'blender.exe', dirs_exist_ok=True)
         else:
-            (local_get(a.src, os.path.relpath(tar, root), tar, want) if a.src else url_get(url, tar, want))
-            log('extract', tar)
-            with tarfile.open(tar) as t:
-                t.extractall(B, filter='tar')
-            os.remove(tar)
-    shutil.copyfile(os.path.join(HERE, 'blender_wrapper.sh'), os.path.join(B, 'bl.sh'))
+            (local_get(a.src, os.path.relpath(archive, root), archive, want) if a.src else url_get(url, archive, want))
+            log('extract', archive)
+            if archive.endswith('.zip'):
+                extract_zip(archive, B)
+            else:
+                with tarfile.open(archive) as t:
+                    t.extractall(B, filter='tar')
+            os.remove(archive)
+    if not os.path.isfile(binary):
+        raise RuntimeError('Blender archive did not contain the expected executable: ' + binary)
+    if executable == 'blender':  # keep existing explicit `bash .../bl.sh` configurations working
+        shutil.copyfile(os.path.join(HERE, 'blender_wrapper.sh'), os.path.join(B, 'bl.sh'))
     addon = os.path.join(B, 'user', 'extensions', 'user_default', 'vrm')
     if os.path.isdir(addon):
         log('present', addon)
@@ -341,8 +423,8 @@ def get_blender(root, a):
         check(z, zwant)
     else:
         url_get(zurl, z, zwant)
-    r = subprocess.run(['bash', os.path.join(B, 'bl.sh'), '--command', 'extension', 'install-file', '--repo', 'user_default',
-                        '--enable', z], capture_output=True, text=True)
+    r = subprocess.run([binary, '--command', 'extension', 'install-file', '--repo', 'user_default',
+                        '--enable', z], capture_output=True, text=True, env=blender_env())
     if r.returncode != 0 or not os.path.isdir(addon):
         raise RuntimeError('VRM Add-on install failed: ' + (r.stdout + r.stderr)[-2000:])
     log('VRM Add-on installed', addon)
@@ -353,6 +435,8 @@ def main():
     ap.add_argument('--root', default=None, help='workspace root (default: hairdeck.paths root)')
     ap.add_argument('--only', nargs='*', default=list(DEFAULT), choices=ITEMS)
     ap.add_argument('--repo', default=REPO, help='Hugging Face model repository with our checkpoints')
+    ap.add_argument('--gated-source', choices=('huggingface', 'modelscope'), default='huggingface',
+                    help='SAM 3 / DINOv3 download source; both use identical release SHA256 checks')
     ap.add_argument('--from', dest='src', default='', help='copy from another workspace instead of downloading')
     a = ap.parse_args()
     if a.root:

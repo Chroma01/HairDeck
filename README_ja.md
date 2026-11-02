@@ -14,6 +14,11 @@
 
 <p align="center"><a href="README.md">English</a> · <a href="README_zh-CN.md">简体中文</a> · <strong>日本語</strong></p>
 
+## 🔥 Updates
+
+- **[2026.11.02]** 🎉 Windows に対応しました！ローカルの Gradio デモ、VRM 出力、モデルの自動 offload が利用できます。[セットアップ](docs/windows.md)
+- **[2026.10.30]** 🎉 HairDeck をリリースしました！[コード](https://github.com/hyz317/HairDeck)・[モデルの重み](https://huggingface.co/hyz317/HairDeck)・[オンラインデモ](https://huggingface.co/spaces/hyz317/HairDeck)を公開しています。
+
 <a name="video"></a>
 
 ## 動画
@@ -43,8 +48,11 @@ https://github.com/user-attachments/assets/3eec4de5-ed21-4b75-b7d7-4bd599cbfeb2
 
 ### 🛠️ インストール
 
-Linux x86-64、Python 3.12、NVIDIA CUDA 対応 GPU 1 基を使用してください。このリリースは PyTorch 2.8 と CUDA 12.8 で動作確認済みです。
-動画プレビューには、`PATH` の通った場所に `ffmpeg` も必要です。
+HairDeck は Linux とネイティブ Windows に対応しています。NVIDIA CUDA GPU、Python 3.12、PyTorch 2.8、CUDA 12.8 を使用します。
+
+**Windows：** [Windows セットアップ](docs/windows.md)に沿ってインストールし、Gradio デモを起動してください。
+
+**Linux：** 以下のコマンドで依存パッケージをインストールしてください。動画プレビュー用に `ffmpeg` をインストールし、`PATH` を通しておきます。
 
 ```bash
 git clone https://github.com/hyz317/HairDeck.git
@@ -61,7 +69,7 @@ python -m pip install --no-deps pyrender==0.1.45  # without its old PyOpenGL pin
 ### 🤗 モデルの重み
 
 チェックポイントと関連アセットは [hyz317/HairDeck](https://huggingface.co/hyz317/HairDeck) で公開しています。
-SAM 3 と DINOv3 のダウンロードにはアクセス許可が必要です。[facebook/sam3](https://huggingface.co/facebook/sam3)
+Hugging Face から SAM 3 と DINOv3 をダウンロードするには、アクセス許可が必要です。[facebook/sam3](https://huggingface.co/facebook/sam3)
 と [facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m) でそれぞれのライセンスに同意してから、ログインしてください。
 
 ```bash
@@ -71,7 +79,7 @@ python scripts/setup/download_weights.py
 ```
 
 ダウンロードスクリプトは、HairDeck のチェックポイント、前処理モデルと画像エンコーダの重み、関連データ、
-および VRM Add-on を組み込んだ Blender 4.2 LTS をセットアップします。Blender はデフォルトで Linux x86-64 版をダウンロードします。
+および VRM Add-on を組み込んだ Blender 4.2 LTS をセットアップします。Blender は使用している OS に対応するバージョンをダウンロードします。
 VRM Add-on を有効にした既存の Blender 4.2 LTS を使う場合は、`HAIRDECK_BLENDER` にその起動コマンドを設定してください。
 
 デフォルトのワークスペース構成は次のとおりです。
@@ -146,7 +154,7 @@ results/my_character/character/
 
 ## 📊 テストセットでの評価
 
-評価用アセットをダウンロードし、点群モデルとチェーンモデルのテストを実行します。各テストではシード 0、1、2 でサンプリングし、
+Linux で評価用アセットをダウンロードし、点群モデルとチェーンモデルのテストを実行します。各テストではシード 0、1、2 でサンプリングし、
 論文に対応する評価指標を表示するとともに、サンプルごとの結果とその平均を `eval.json` に保存します。
 
 ```bash
@@ -162,7 +170,7 @@ python scripts/test.py chains --cards results/pointcloud     # On the point-clou
 
 ## 🏋️ 学習
 
-CHARM データセットとキャラクターの VRM ファイルを用意し、次のコマンドを実行します。
+CHARM データセットとキャラクターの VRM ファイルを用意し、Linux で次のコマンドを実行します。
 
 ```bash
 python scripts/setup/download_weights.py --only dora test_data charm_test_pc
@@ -171,8 +179,7 @@ bash scripts/train/launch_vae.sh
 bash scripts/train/launch_pc_dit.sh && bash scripts/train/launch_img_dit.sh && bash scripts/train/launch_chain_dit.sh
 ```
 
-学習スクリプトの出力先は `ckpt/train_*` で、ダウンロードしたチェックポイントとは別に保存されます。現在の画像モデルの学習設定には synthetic appearance augmentation が含まれます。公開した画像モデルの学習に使用した、スタイルを変換したレンダリング画像群は、
-このリリースには含まれていません。
+学習結果は `ckpt/train_*` に保存され、ダウンロードしたチェックポイントとは別に管理されます。画像モデルの学習には synthetic appearance augmentation を使用します。
 
 <a name="citation"></a>
 

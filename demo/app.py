@@ -204,8 +204,11 @@ def pick_sample(state, seed):
 
 def vrm_text(seed, info):
     check = 'The file passed validation.' if info['ok'] else 'The file did not pass every validation check.'
-    return (f"Seed {seed} · VRM 0.x · {info['size_mb']} MB. {check} "
+    text = (f"Seed {seed} · VRM 0.x · {info['size_mb']} MB. {check} "
             'Includes a sample avatar with the generated hair and spring bones.')
+    if info.get('render_error'):
+        text += ' The preview image is unavailable; the VRM is ready to download.'
+    return text
 
 
 def turn_text(seed):
@@ -222,16 +225,22 @@ def make_vrm(state, seed):
         ensure_chains(s)
         d = s['out_dir']
         vi = f"{d}/vrm_seed{s['seed']}/vrm_info.json"
-        if os.path.exists(VX.vrm_path(d, s['seed'])) and os.path.exists(vi):
-            info = json.load(open(vi))
-        else:
-            info = VX.export_vrm(d, s['seed'], json.load(open(f'{d}/info.json'))['hair_color'])
+        info = None
+        if os.path.exists(vi):
+            with open(vi, encoding='utf-8') as f:
+                info = json.load(f)
+        if not (info and info.get('ok') and os.path.exists(VX.vrm_path(d, s['seed']))):
+            with open(f'{d}/info.json', encoding='utf-8') as f:
+                color = json.load(f)['hair_color']
+            info = VX.export_vrm(d, s['seed'], color)
     except gr.Error:
         raise
     except Exception:
         log('ERROR vrm', traceback.format_exc())
         raise gr.Error('The VRM export failed. Please try again.')
     s['vrm'] = info['vrm']
+    if info.get('render_error'):
+        log('VRM preview unavailable', info['render_error'])
     tm = info['timings']
     text = vrm_text(s['seed'], info)
     log('VRM', d, s['seed'], info['ok'], info['problems'][:3], tm, 'wall %.1f' % (time.time() - t0))
@@ -281,9 +290,15 @@ def restore(show_head, show_chains, state, request: gr.Request):
             out[MAXS + 6] = s0['vrm'] = VX.vrm_path(d, s0['seed'])
             vi = f"{d}/vrm_seed{s0['seed']}/vrm_info.json"
             if os.path.exists(vi):
-                out[MAXS + 9] = vrm_text(s0['seed'], json.load(open(vi)))
-            if os.path.exists(f"{d}/vrm_seed{s0['seed']}/rest.png"):
-                out[MAXS + 7] = f"{d}/vrm_seed{s0['seed']}/rest.png"
+                with open(vi, encoding='utf-8') as f:
+                    saved = json.load(f)
+                out[MAXS + 9] = vrm_text(s0['seed'], saved)
+                preview = saved.get('rest_png')
+                if saved.get('ok') and preview and os.path.isfile(preview):
+                    out[MAXS + 7] = preview
+                if not saved.get('ok'):
+                    out[MAXS + 6] = None
+                    s0.pop('vrm', None)
         for s in st:
             if os.path.exists(f"{d}/chains_seed{s['seed']}.json"):
                 s['chains_json'] = f"{d}/chains_seed{s['seed']}.json"

@@ -17,20 +17,19 @@ turn_preview(out_dir, seed, colour_srgb, show_chains=False, body=None): hairdeck
 out_dir/turn_seed{s}.mp4 (turn_seed{s}_chains.mp4 with the chain joints drawn) and its json.
 
 Environment:
-  HAIRDECK_BLENDER     command that runs Blender 4.2 LTS with the VRM Add-on for Blender (split like a shell command
-                       line; default: bash ROOT/third_party/blender/bl.sh)
-  HAIRDECK_GL          OpenGL platform of the render subprocesses: egl (default; EGL device = the first of
-                       CUDA_VISIBLE_DEVICES) or osmesa (CPU)
+  HAIRDECK_BLENDER     Blender executable or command override; otherwise the managed platform-specific installation
+  HAIRDECK_GL          render backend: pyglet (Windows desktop default), egl (Linux default), or osmesa (CPU)
   HAIRDECK_PYTHONPATH  PYTHONPATH of the subprocesses (e.g. vendored packages such as pyrender); otherwise none
   HAIRDECK_VRM_WORK    directory of the worker's job files (jobs/), its cache (ref/) and its log (default
                        results/vrm_export)
 
-python -m hairdeck.vrm.export OUT_DIR SEED [vrm|turn|both] [--body BODY_JSON]   (hair colour from OUT_DIR/info.json)
+python -m hairdeck.vrm.export OUT_DIR SEED [vrm|turn|both] [--body BODY_JSON] [--no-render]
+(hair colour from OUT_DIR/info.json; --no-render exports the VRM without either preview)
 """
 import hashlib
 import json
 import os
-import shlex
+import shutil
 import struct
 import subprocess
 import sys
@@ -38,22 +37,17 @@ import time
 import uuid
 
 from .. import paths
+from ..blender_runtime import blender_cmd, blender_env
 from ..infer.glb import srgb_to_linear
+from ..process import background_process_kwargs, process_alive
+from ..vis.gl_backend import render_env
 from . import body as B
 from .check import check
 from .prep import prepare
 
 RELEASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPTS = os.path.join(RELEASE, 'blender')
-BLENDER = ('third_party', 'blender', 'bl.sh')  # default Blender wrapper, under paths.root()
 WORK = 'vrm_export'  # default worker folder, under paths.results()
-
-
-def blender_cmd():
-    """Command prefix that runs Blender: HAIRDECK_BLENDER, else `bash ROOT/third_party/blender/bl.sh` (a wrapper that
-    keeps Blender's user, cache and temporary paths inside the workspace)."""
-    c = os.environ.get('HAIRDECK_BLENDER')
-    return shlex.split(c) if c else ['bash', paths.root(*BLENDER)]
 
 
 def work_dir(*p):
@@ -69,18 +63,20 @@ def start_worker(body=None):
     for f in ('ready', 'stop'):
         if os.path.exists(f'{jobs}/{f}'):
             os.remove(f'{jobs}/{f}')
-    lf = open(work_dir('worker.log'), 'a')
-    return subprocess.Popen(blender_cmd() + ['-b', '--python', os.path.join(SCRIPTS, 'vrm_worker.py'), '--', B.body_path(body),
-                                             jobs, work_dir('ref'), str(os.getpid())],
-                            stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=_env(False), cwd=RELEASE,
-                            start_new_session=True)
+    with open(work_dir('worker.log'), 'a') as lf:
+        return subprocess.Popen(blender_cmd() + ['-b', '--python', os.path.join(SCRIPTS, 'vrm_worker.py'), '--', B.body_path(body),
+                                                 jobs, work_dir('ref'), str(os.getpid())],
+                                stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=_env(False), cwd=RELEASE,
+                                **background_process_kwargs())
 
 
 def worker_pid(body=None):
     """PID of a running worker for the body (default body), else None."""
     try:
-        r = json.load(open(work_dir('jobs', 'ready')))
-        os.kill(r['pid'], 0)
+        with open(work_dir('jobs', 'ready')) as f:
+            r = json.load(f)
+        if not process_alive(r['pid']):
+            return None
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return r['pid'] if r.get('body') == B.body_path(body) else None
@@ -116,12 +112,21 @@ def _env(gl=True):
     if os.environ.get('HAIRDECK_PYTHONPATH'):
         e['PYTHONPATH'] = os.environ['HAIRDECK_PYTHONPATH']
     e.update(OMP_NUM_THREADS='2', MKL_NUM_THREADS='2', PYTHONNOUSERSITE='1')
-    if gl and os.environ.get('HAIRDECK_GL') == 'osmesa':  # CPU rendering (no GPU, e.g. outside a GPU slot)
-        e['PYOPENGL_PLATFORM'] = 'osmesa'
-        e.pop('EGL_DEVICE_ID', None)
-    elif gl:
-        e.update(PYOPENGL_PLATFORM='egl', EGL_DEVICE_ID=os.environ.get('CUDA_VISIBLE_DEVICES', '0').split(',')[0] or '0')
-    return e
+    return render_env(e) if gl else blender_env(e)
+
+
+def _link_or_copy(src, dst, symbolic=False):
+    """Atomically publish a file, with a copy fallback for Windows permissions/filesystems."""
+    temp = dst + '.' + uuid.uuid4().hex + '.tmp'
+    try:
+        try:
+            (os.symlink if symbolic else os.link)(src, temp)
+        except OSError:
+            shutil.copy2(src, temp)
+        os.replace(temp, dst)
+    finally:
+        if os.path.lexists(temp):
+            os.remove(temp)
 
 
 def _run(cmd, log, env, timeout=600):
@@ -178,7 +183,9 @@ def export_vrm(out_dir, seed, colour_srgb, body=None, render=True):
     """One saved sample -> its VRM (see the module docstring). colour_srgb: hair colour, sRGB 0..1 (the image pipeline's
     info.json 'hair_color'); body: a body file (default hairdeck.vrm.body.default_path()). Returns dict(vrm, rest_png,
     ok, problems (of hairdeck.vrm.check), n_cards, n_chains_in, n_chains, n_spring_groups, hair_verts, removed_hair,
-    bones_deleted, blender_sec, blender_path ('worker' | 'one-shot'), render_queue_patched, size_mb, timings)."""
+    bones_deleted, blender_sec, blender_path ('worker' | 'one-shot'), render_queue_patched, size_mb, timings).
+    A failed optional static preview is reported in render_error, with rest_png=None; the validated VRM is still
+    returned. Preparation, Blender export and validation failures raise instead."""
     out_dir = os.path.abspath(out_dir)  # the subprocesses run in the release tree
     bd = B.body(body)
     T = {}
@@ -198,25 +205,45 @@ def export_vrm(out_dir, seed, colour_srgb, body=None, render=True):
     ref, orig = work_dir('ref', B.file_name('orig', bd)), f"{d}/{B.file_name('orig', bd)}"
     patched = patch_render_queue(gen, ref) if how == 'worker' and os.path.exists(ref) else []
     if os.path.exists(ref) and not os.path.exists(orig):
-        os.symlink(ref, orig)
+        _link_or_copy(ref, orig, symbolic=True)
     t = time.time()
     chk = check(d, prep, bd)
-    json.dump(chk, open(f'{d}/check.json', 'w'), indent=1, default=str)
+    with open(f'{d}/check.json', 'w') as f:
+        json.dump(chk, f, indent=1, default=str)
     T['check'] = time.time() - t
-    if render:
-        T['render'] = _run([sys.executable, '-m', 'hairdeck.vrm.render', f'{d}/rest.png', gen], f'{d}/render.log', _env(True))
+    if not chk['ok']:
+        raise RuntimeError('VRM validation failed: ' + '; '.join(map(str, chk['problems'])) + '; see ' + f'{d}/check.json')
     dst = vrm_path(out_dir, seed, body)
-    if os.path.exists(dst):
-        os.remove(dst)
-    os.link(gen, dst)
-    ex = json.load(open(f"{d}/{B.file_name('export', bd)}"))
+    _link_or_copy(gen, dst)
+    with open(f"{d}/{B.file_name('export', bd)}") as f:
+        ex = json.load(f)
+    rest_png, render_error = None, None
+    if render:
+        t = time.time()
+        rest = f'{d}/rest.png'
+        try:
+            if os.path.exists(rest):
+                os.remove(rest)  # a previous export's image must not masquerade as this one's preview
+            _run([sys.executable, '-m', 'hairdeck.vrm.render', rest, gen], f'{d}/render.log', _env(True))
+            if not os.path.isfile(rest):
+                raise RuntimeError('Preview renderer finished without writing ' + rest)
+            rest_png = rest
+        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
+            render_error = f'{type(error).__name__}: {error}'
+            if os.path.exists(rest):
+                try:
+                    os.remove(rest)
+                except OSError:
+                    pass
+        T['render'] = time.time() - t
     T['total'] = time.time() - t_all
-    info = dict(vrm=dst, rest_png=f'{d}/rest.png' if render else None, ok=chk['ok'], problems=chk['problems'],
+    info = dict(vrm=dst, rest_png=rest_png, render_error=render_error, ok=chk['ok'], problems=chk['problems'],
                 n_cards=n_cards, n_chains_in=n_chains, n_chains=ex.get('n_new_chains'), n_spring_groups=ex.get('n_spring_groups'),
                 hair_verts=ex.get('hair_verts'), removed_hair=ex.get('hair_objects'), bones_deleted=ex.get('bones_deleted'),
                 blender_sec=ex.get('blender_sec'), blender_path=how, render_queue_patched=patched,
                 size_mb=round(os.path.getsize(dst) / 1e6, 1), timings={k2: round(v, 2) for k2, v in T.items()})
-    json.dump(info, open(f'{d}/vrm_info.json', 'w'), indent=1, default=str)
+    with open(f'{d}/vrm_info.json', 'w') as f:
+        json.dump(info, f, indent=1, default=str)
     return info
 
 
@@ -265,15 +292,19 @@ def main():
     ap.add_argument('seed', type=int)
     ap.add_argument('what', nargs='?', default='both', choices=['vrm', 'turn', 'both'])
     ap.add_argument('--body', default=None, help='body file (default: hairdeck.vrm.body.default_path())')
+    ap.add_argument('--no-render', action='store_true', help='export only the VRM, without static or video previews')
     a = ap.parse_args()
-    info = json.load(open(f'{a.out_dir}/info.json'))
+    if a.no_render and a.what == 'turn':
+        ap.error('--no-render cannot be combined with turn')
+    with open(f'{a.out_dir}/info.json') as f:
+        info = json.load(f)
     smp = [s for s in info.get('samples', []) if s['seed'] == a.seed]
     if not smp or not smp[0].get('n_meshed'):
         sys.exit(f'{a.out_dir}: its info.json has no generated hair for seed {a.seed} ({info.get("message") or "not sampled"})')
     col = info['hair_color']
     if a.what in ('vrm', 'both'):
-        print('VRM', json.dumps(export_vrm(a.out_dir, a.seed, col, a.body), default=str))
-    if a.what in ('turn', 'both'):
+        print('VRM', json.dumps(export_vrm(a.out_dir, a.seed, col, a.body, render=not a.no_render), default=str))
+    if a.what in ('turn', 'both') and not a.no_render:
         print('TURN', json.dumps(turn_preview(a.out_dir, a.seed, col, body=a.body)))
 
 

@@ -22,3 +22,6 @@ venv/
 /scratch/
 /data/*
 !/data/lists/
+
+# Default Windows workspace (downloaded models and generated files)
+/workspace/

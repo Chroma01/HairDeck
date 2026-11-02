@@ -1,0 +1,14 @@
+# Native Windows x64, Python 3.12, NVIDIA CUDA.
+# Install the CUDA wheels first (in the same Python environment):
+#   python -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+# Then: python -m pip install -r requirements-windows.txt
+# Also: python -m pip install --no-deps pyrender==0.1.45
+-r requirements.txt
+
+# SAM 3 imports Triton even when compilation is disabled. PyTorch 2.8 pairs with
+# Triton 3.4: https://github.com/triton-lang/triton-windows#3-pytorch
+# This release provides a CPython 3.12 Windows x64 wheel on PyPI.
+triton-windows==3.4.0.post21; sys_platform == "win32"
+
+# Bundles ffmpeg.exe for the video preview; no system-wide ffmpeg install needed.
+imageio-ffmpeg==0.6.0; sys_platform == "win32"

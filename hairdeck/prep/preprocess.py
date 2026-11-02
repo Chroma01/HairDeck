@@ -93,7 +93,7 @@ PRESETS = json.load(open(f'{HERE}/presets.json'))
 
 class Prep:
     def __init__(self, cfg, matte=None, matte_size=0, wr=1024, crop_expand=1.3, compile=False, sam_blur=0.0,
-                 matte_blur=0.0, sam_max=0):
+                 matte_blur=0.0, sam_max=0, residency=None):
         self.cfg = dict(recipe.DEFAULT, **cfg)
         c = self.cfg
         self.prompts = list(dict.fromkeys(list(c['person_prompts']) + list(c['hair_prompts']) + list(c['face_prompts'])
@@ -108,9 +108,16 @@ class Prep:
         ts += [c['hair_low']] if c['hair_low'] > 0 else []
         ts += [x for x in (c['face_fallback'], c['hair_fallback']) if x > 0]
         self.t_min = min(ts)
-        self.model, self.proc = load_model(compile)
+        self.residency = residency
+        self.device = torch.device(residency.device if residency is not None else 'cuda')
+        initial_device = residency.initial_device if residency is not None else self.device
+        self.model, self.proc = load_model(compile, device=initial_device, inference_device=self.device)
         self._tf = None  # the prompts' text features, made at the first use (property tf)
-        self.matte = build_matte(matte, matte_size) if matte else None
+        self.matte = (build_matte(matte, matte_size, device=initial_device, inference_device=self.device)
+                      if matte else None)
+        if residency is not None:
+            residency.register('sam3', self.model)
+            residency.register('matte', self.matte.net if self.matte is not None else None)
         self.wr = wr
         self.crop_expand = crop_expand
         self.sam_blur, self.matte_blur = sam_blur, matte_blur  # Gaussian blur (px) of the SAM3 / matting input only
@@ -121,16 +128,19 @@ class Prep:
         """made at the first use, not in __init__: on a Hugging Face ZeroGPU Space the models load without a GPU, and the
         GPU worker cannot use inference tensors made at load ("Inference tensors do not track version counter")"""
         if self._tf is None:
-            self._tf = text_feats(self.model, self.prompts)
+            self._tf = text_feats(self.model, self.prompts, device=self.device)
         return self._tf
 
     def _sam(self, im, prompts, shape, paste=None):
         """One SAM3 pass. Returns {prompt: [(score, bool mask at working res)]} and the kept low-res logits.
         paste = (X0, Y0, cw, ch, shape): the image is a crop; masks are upsampled to (ch, cw) and pasted at (X0, Y0)
         into a working-res canvas of the full image."""
+        if self.residency is not None:
+            self.residency.activate('sam3')
         with torch.autocast('cuda', dtype=torch.bfloat16):
             st = self.proc.set_image(im)
-            pr, bx, mk = ground(self.model, st, self.tf, [self.prompts.index(p) for p in prompts])
+            pr, bx, mk = ground(self.model, st, self.tf, [self.prompts.index(p) for p in prompts],
+                                device=self.device)
         inst, logits = {}, {}
         for j, p in enumerate(prompts):
             keep = torch.nonzero(pr[j] > self.t_min)[:, 0]
@@ -145,7 +155,7 @@ class Prep:
             else:
                 X0, Y0, cw, ch = paste
                 u = F.interpolate(lg, (ch, cw), mode='bilinear', align_corners=False)[:, 0] > 0
-                full = torch.zeros((len(keep),) + tuple(shape), dtype=torch.bool, device='cuda')
+                full = torch.zeros((len(keep),) + tuple(shape), dtype=torch.bool, device=self.device)
                 ys0, xs0, ys1, xs1 = max(0, Y0), max(0, X0), min(shape[0], Y0 + ch), min(shape[1], X0 + cw)
                 if ys1 > ys0 and xs1 > xs0:
                     full[:, ys0:ys1, xs0:xs1] = u[:, ys0 - Y0:ys1 - Y0, xs0 - X0:xs1 - X0]
@@ -161,7 +171,7 @@ class Prep:
         H, W = rgb.shape[:2]
         s = min(1.0, self.wr / max(H, W))
         shape = (max(1, round(H * s)), max(1, round(W * s)))
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         t0 = time.time()
         im_s = im.filter(ImageFilter.GaussianBlur(self.sam_blur)) if self.sam_blur > 0 else im
         if self.sam_max > 0 and max(im_s.size) > self.sam_max:
@@ -188,14 +198,16 @@ class Prep:
                 cw, ch = max(1, int(round((x1 - x0) * s))), max(1, int(round((y1 - y0) * s)))
                 inst_c, logits_c = self._sam(cim, self.crop_prompts, shape, paste=(X0, Y0, cw, ch))
                 cbox, crop_px = (X0, Y0, X0 + cw, Y0 + ch), (x0, y0, x1, y1)
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         t1 = time.time()
         T['sam3'] = t1 - t0
         alpha = None
         if self.matte is not None:
+            if self.residency is not None:
+                self.residency.activate('matte')
             a = self.matte(np.asarray(im.filter(ImageFilter.GaussianBlur(self.matte_blur))) if self.matte_blur > 0 else rgb)
             alpha = F.interpolate(a[None, None], shape, mode='bilinear', align_corners=False)[0, 0].cpu().numpy()
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(self.device)
         t2 = time.time()
         T['matte'] = t2 - t1
         pa, ph, pf, info = recipe.run(inst, shape, self.cfg, alpha, inst_crop=inst_c, crop_box=cbox)
@@ -203,11 +215,11 @@ class Prep:
         T['recipe'] = t3 - t2
 
         def full(keys):
-            out = torch.zeros((H, W), dtype=torch.bool, device='cuda')
+            out = torch.zeros((H, W), dtype=torch.bool, device=self.device)
             for kk in keys:
                 if kk[0] == 'cc':  # hysteresis instance restricted to its parts touching the hair
                     _, p, j = kk
-                    reg = torch.from_numpy(info['hair_cc_region']).cuda()[None, None].float()
+                    reg = torch.from_numpy(info['hair_cc_region']).to(self.device)[None, None].float()
                     reg = F.interpolate(reg, (H, W), mode='nearest')[0, 0] > 0.5
                     out |= (F.interpolate(logits[p][j:j + 1], (H, W), mode='bilinear', align_corners=False)[0, 0] > 0) & reg
                     continue
@@ -227,12 +239,12 @@ class Prep:
         if info.get('hair_minus_keys'):
             hair &= ~full(info['hair_minus_keys'])
         if info.get('hair_region') is not None:  # pruned stray hair components
-            reg = torch.from_numpy(info['hair_region']).cuda()[None, None].float()
+            reg = torch.from_numpy(info['hair_region']).to(self.device)[None, None].float()
             hair &= F.interpolate(reg, (H, W), mode='nearest')[0, 0] > 0.5
-        person = F.interpolate(torch.from_numpy(pa).cuda()[None, None], (H, W), mode='bilinear',
+        person = F.interpolate(torch.from_numpy(pa).to(self.device)[None, None], (H, W), mode='bilinear',
                                align_corners=False)[0, 0].clamp(0, 1)
         person = (person * 255).round().byte()
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(self.device)
         T['full_res'] = time.time() - t3
         return person, hair, face, info, T
 
@@ -246,7 +258,7 @@ def one(prep, f):
     person_g, hair_g, face_g, info, T = prep(im_model)
     r = dict(status=info.get('status', 'ok'), size=list(im.size))
     if in_alpha is not None:  # transparent input: outputs limited to the input alpha
-        ag = torch.from_numpy(np.ascontiguousarray(in_alpha)).cuda()
+        ag = torch.from_numpy(np.ascontiguousarray(in_alpha)).to(person_g.device)
         person_g = torch.minimum(person_g, ag)
         hair_g = hair_g & (ag > 127)
         face_g = face_g & (ag > 127)
@@ -284,12 +296,12 @@ class Preprocessor:
     info, backend); rgb is the RGB the model input is cut from (the stored colours, Image.open(f).convert('RGB'), the
     person matte being limited to the input alpha)."""
 
-    def __init__(self, preset='best'):
+    def __init__(self, preset='best', residency=None):
         self.name = f'matting:{preset}'
         t0 = time.time()
         P = PRESETS[preset]
         self.prep = Prep(P['cfg'], P.get('alpha'), P.get('alpha_size', 0), P.get('wr', 1024), P.get('crop_expand', 1.3),
-                         False)
+                         False, residency=residency)
         self.load_sec = round(time.time() - t0, 1)
 
     def __call__(self, rgb, alpha=None, image_path=None):
@@ -297,7 +309,7 @@ class Preprocessor:
             arr = np.concatenate([rgb, np.asarray(alpha)[..., None]], -1) if alpha is not None else rgb
             image_path = Image.fromarray(arr)
         r, person, hair, face = one(self.prep, image_path)
-        r['peak_gpu_gb'] = round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
+        r['peak_gpu_gb'] = round(torch.cuda.max_memory_allocated(self.prep.device) / 2 ** 30, 2)
         box = tuple(r['box']) if 'box' in r else None
         return dict(rgb=rgb, person=np.asarray(person, np.uint8), hair=np.asarray(hair, bool), face=np.asarray(face, bool),
                     box=None if box is None else tuple(float(v) for v in box), status=r['status'],

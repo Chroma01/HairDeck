@@ -1,4 +1,4 @@
-"""Rest-pose renders of VRM 0.x files with the skin applied (pyrender; EGL, or OSMesa on CPU): every mesh node's
+"""Rest-pose renders of VRM 0.x files with the skin applied (pyrender; desktop OpenGL, EGL or OSMesa): every mesh node's
 vertices go through its skin at rest (sum over influences of weight x joint global matrix x inverse bind matrix;
 unskinned meshes use the node's global matrix), so what is drawn is what a VRM viewer shows in the rest pose. Generated
 hair (mesh Hair_gen) in its material colour, other hair (meshes named like 'hair') in orange, everything else light grey.
@@ -15,13 +15,14 @@ import trimesh
 from PIL import Image, ImageDraw
 
 from ..spring import vrm_spring as VS
+from ..vis.gl_backend import configure_gl
 
 BG = 236
 
 
 def _pyrender():
-    """pyrender, imported on first use (PYOPENGL_PLATFORM defaults to egl)."""
-    os.environ.setdefault('PYOPENGL_PLATFORM', 'egl')
+    """pyrender, imported after selecting desktop Windows or headless Linux OpenGL."""
+    configure_gl()
     import pyrender
     return pyrender
 

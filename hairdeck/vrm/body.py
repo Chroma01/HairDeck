@@ -91,11 +91,12 @@ def build(vrm, ddir, key, h, tag, out_json):
     then hairdeck.data.head_frame.fit_one and the head-frame transform k = W / w, b = O - k * anchor. Writes OUT_JSON
     and OUT_JSON's name + _blender.json (the boxes); returns the body dict."""
     import subprocess
+    from ..blender_runtime import blender_env
     from ..data.head_frame import anchor, fit_one
     from .export import SCRIPTS, blender_cmd
     meta_json = os.path.splitext(out_json)[0] + '_blender.json'
     r = subprocess.run(blender_cmd() + ['-b', '--python', os.path.join(SCRIPTS, 'body_boxes.py'), '--', vrm, meta_json],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=blender_env())
     if r.returncode != 0 or not os.path.exists(meta_json):
         raise RuntimeError('body_boxes.py failed: ' + (r.stdout + r.stderr)[-2000:])
     _, fit = fit_one((key, ddir, meta_json))
@@ -109,7 +110,10 @@ def build(vrm, ddir, key, h, tag, out_json):
 
     def rel(p):  # relative only when it reads back as the same file (paths.resolve, e.g. with another HAIRDECK_DATA)
         p = os.path.abspath(p)
-        r = os.path.relpath(p, root)
+        try:
+            r = os.path.relpath(p, root)
+        except ValueError:  # Windows: the body may live on a different drive
+            return p
         return r if not r.startswith('..') and os.path.abspath(paths.resolve(r)) == p else p
     out = dict(h=int(h), key=key, vrm=rel(vrm), dir=rel(ddir), fit=fit, k=float(k), b=b.tolist(), file_tag=tag,
                blender_meta=rel(meta_json), made_by='hairdeck.vrm.body build')

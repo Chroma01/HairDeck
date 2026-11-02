@@ -31,7 +31,8 @@ def main():
                     'released one under paths.ckpt())')
     a = ap.parse_args()
     names = [os.path.splitext(os.path.basename(f))[0] for f in a.images]
-    dup = sorted({n for n in names if names.count(n) > 1})
+    keys = [os.path.normcase(n) for n in names]
+    dup = sorted({n for n, key in zip(names, keys) if keys.count(key) > 1})
     if dup:  # each image writes OUT_DIR/<its name>/ and one entry of summary.json
         sys.exit(f'images with the same name {dup}: rename them or run them separately')
     P = Pipeline(ckpt=a.ckpt, chain_ckpt=a.chain_ckpt, chains=not a.no_chains)

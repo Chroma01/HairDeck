@@ -24,16 +24,17 @@ import os
 _ENV = {'root': 'HAIRDECK_ROOT', 'data': 'HAIRDECK_DATA', 'ckpt': 'HAIRDECK_CKPT', 'logs': 'HAIRDECK_LOGS',
         'results': 'HAIRDECK_RESULTS', 'scratch': 'HAIRDECK_SCRATCH', 'weights': 'HAIRDECK_WEIGHTS',
         'dinov3_repo': 'HAIRDECK_DINOV3_REPO', 'sam3_repo': 'HAIRDECK_SAM3_REPO'}
+# Logical workspace paths use '/', independently of the host filesystem separator.
 _UNDER_ROOT = {'data': 'data', 'ckpt': 'ckpt', 'logs': 'logs', 'results': 'results', 'scratch': 'scratch',
-               'weights': os.path.join('third_party', 'weights'), 'dinov3_repo': os.path.join('third_party', 'dinov3_src'),
-               'sam3_repo': os.path.join('third_party', 'sam3_src')}
+               'weights': 'third_party/weights', 'dinov3_repo': 'third_party/dinov3_src',
+               'sam3_repo': 'third_party/sam3_src'}
 _DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'configs', 'paths.json')
 
 
 def _config():
     fn = os.environ.get('HAIRDECK_CONFIG') or _DEFAULT_CONFIG
     if os.path.isfile(fn):
-        with open(fn) as f:
+        with open(fn, encoding='utf-8-sig') as f:
             return json.load(f)
     return {}
 
@@ -47,7 +48,7 @@ def get(key):
     if cfg.get(key):
         return cfg[key]
     if key != 'root':
-        return os.path.join(get('root'), _UNDER_ROOT[key])
+        return os.path.join(get('root'), *_UNDER_ROOT[key].split('/'))
     v = cfg.get('root')
     if not v:
         raise RuntimeError('hairdeck.paths: set HAIRDECK_ROOT (or HAIRDECK_DATA, HAIRDECK_CKPT, ...) or write '
@@ -95,9 +96,11 @@ def resolve(p):
     """Command-line paths such as 'ckpt/NAME/model.safetensors' or 'results/RUN' are relative to the workspace layout: a
     path under data/, ckpt/, logs/, results/, scratch/ or third_party/weights/ goes to that folder (HAIRDECK_DATA, ...
     apply), any other to the root; absolute paths are returned unchanged."""
+    p = os.fspath(p)
     if os.path.isabs(p):
         return p
+    logical = p.replace('\\', '/')
     for key, base in sorted(_UNDER_ROOT.items(), key=lambda kv: -len(kv[1])):
-        if key in ('data', 'ckpt', 'logs', 'results', 'scratch', 'weights') and (p == base or p.startswith(base + os.sep)):
-            return os.path.join(get(key), p[len(base) + 1:]) if p != base else get(key)
-    return root(p)
+        if key in ('data', 'ckpt', 'logs', 'results', 'scratch', 'weights') and (logical == base or logical.startswith(base + '/')):
+            return os.path.join(get(key), *logical[len(base) + 1:].split('/')) if logical != base else get(key)
+    return root(*logical.split('/'))

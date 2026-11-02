@@ -1,4 +1,4 @@
-"""Head-turn preview of generated hair with its spring-bone chains (pyrender with EGL or OSMesa, ffmpeg with libx264).
+"""Head-turn preview of generated hair and spring-bone chains (pyrender, ffmpeg with libx264).
 
 The cards and chains are in the head frame. Units are converted to meters the way the VRM export does it for the body
 (hairdeck.vrm.body: head frame -> the body's dataset frame with its k, b, then / its fit scale s), so the spring
@@ -15,8 +15,9 @@ with the head; later joints that rest inside are not pushed out (no start-up jum
 
 PYOPENGL_PLATFORM=egl|osmesa python -m hairdeck.vis.turn_preview CARDS_JSON CHAINS_JSON R,G,B OUT.mp4 [--chains_visible]
        [--body BODY_JSON]
-(CHAINS_JSON '-' for none; colour sRGB 0..1; ffmpeg: HAIRDECK_FFMPEG or the one on PATH.) Prints 'PREVIEW' + a json
+(CHAINS_JSON '-' for none; colour sRGB 0..1; ffmpeg: HAIRDECK_FFMPEG, PATH or imageio-ffmpeg.) Prints 'PREVIEW' + a json
 summary.
+Windows uses desktop OpenGL by default; HAIRDECK_GL can select pyglet, egl or osmesa.
 """
 import argparse
 import json
@@ -34,6 +35,7 @@ from ..spring.sim import bind, centreline, clean, deform, rot_y, rotdiff, skin
 from ..vrm.body import body as load_body
 from ..vrm.render import look
 from .head_proxy import canonical
+from .gl_backend import configure_gl
 
 FPS, DUR, EVERY = 60, 3.0, 2
 DRAG, GRAVITY, HIT = 0.4, 0.0, 0.02  # the spring-group parameters of the VRM export (blender/vrm_hair.py)
@@ -42,10 +44,32 @@ BG = np.array([238, 238, 238], np.float64)
 
 
 def _pyrender():
-    """pyrender, imported on first use (PYOPENGL_PLATFORM defaults to egl)."""
-    os.environ.setdefault('PYOPENGL_PLATFORM', 'egl')
+    """pyrender, imported after selecting desktop Windows or headless Linux OpenGL."""
+    configure_gl()
     import pyrender
     return pyrender
+
+
+def ffmpeg_executable():
+    """Configured FFmpeg, system FFmpeg, or the optional imageio-ffmpeg bundled binary."""
+    override = os.environ.get('HAIRDECK_FFMPEG')
+    if override:
+        executable = shutil.which(override)
+        if executable:
+            return executable
+        raise RuntimeError('HAIRDECK_FFMPEG does not name an executable: ' + override)
+    executable = shutil.which('ffmpeg')
+    if executable:
+        return executable
+    try:
+        import imageio_ffmpeg
+        executable = imageio_ffmpeg.get_ffmpeg_exe()
+        if shutil.which(executable):
+            return executable
+    except (ImportError, OSError, RuntimeError):
+        pass
+    raise RuntimeError('FFmpeg was not found. Install imageio-ffmpeg, add ffmpeg to PATH, or set HAIRDECK_FFMPEG '
+                       'to the ffmpeg executable.')
 
 
 def smooth(x):
@@ -136,6 +160,7 @@ def flat_mesh(V, F, colour, double=True):
 def preview(cards_json, chains_json, colour, out, show_chains=False, body=None):
     """Simulate and render one hairstyle -> out (mp4); returns the summary dict. colour: sRGB (3,); chains_json: path or
     '-'; body: a body file (default the default body of hairdeck.vrm.body)."""
+    ffmpeg = ffmpeg_executable()
     pyrender = _pyrender()
     t_start = time.time()
     colour = np.asarray(colour, np.float64)
@@ -229,7 +254,6 @@ def preview(cards_json, chains_json, colour, out, show_chains=False, body=None):
     r.delete()
     t_render = time.time() - t0
     t0 = time.time()
-    ffmpeg = os.environ.get('HAIRDECK_FFMPEG') or shutil.which('ffmpeg') or 'ffmpeg'
     subprocess.run([ffmpeg, '-y', '-loglevel', 'error', '-framerate', str(FPS // EVERY), '-i', f'{fdir}/%04d.png',
                     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '22', '-movflags', '+faststart', out], check=True)
     t_enc = time.time() - t0
