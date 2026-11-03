@@ -5,7 +5,6 @@ import unittest
 from unittest.mock import patch
 
 import torch
-import torchvision  # noqa: F401  (import before the torch.ones patch below)
 
 path = Path(__file__).resolve().parents[1] / 'scripts/check_environment.py'
 spec = importlib.util.spec_from_file_location('hairdeck_environment_report', path)
@@ -23,7 +22,8 @@ class EnvironmentReportTests(unittest.TestCase):
 
     def test_cuda_device_report_uses_separate_name_and_memory(self):
         props = types.SimpleNamespace(name='Fake GPU', total_memory=80 * 2 ** 30)
-        with patch('hairdeck.dev.select', return_value=torch.device('cuda')), \
+        with patch.dict('sys.modules', {'torchvision': types.SimpleNamespace(__version__='test')}), \
+                patch('hairdeck.dev.select', return_value=torch.device('cuda')), \
                 patch('hairdeck.dev.sync'), \
                 patch.object(torch, 'ones', return_value=torch.ones((16, 16))), \
                 patch.object(torch.cuda, 'current_device', return_value=0), \

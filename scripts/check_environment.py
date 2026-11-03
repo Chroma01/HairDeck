@@ -54,17 +54,23 @@ def device_check():
 
 def dependency_check():
     names = ('gradio', 'pyrender', 'PyOpenGL', 'numpy', 'transformers', 'huggingface-hub')
+    optional = {'gradio', 'pyrender', 'PyOpenGL'}  # demo and previews
 
-    def version(name):  # gradio only for the demo, pyrender only for the previews
+    def version(name):
         try:
             return importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
+            if name not in optional:
+                raise
             return 'absent'
     versions = ', '.join(f'{name} {version(name)}' for name in names)
     try:
         import triton
         versions += f', triton {triton.__version__}'
-    except ModuleNotFoundError:  # absent on macOS, where SAM 3 only needs the import (hairdeck/vendor/triton)
+    except ModuleNotFoundError as exc:
+        # Only a missing Triton package on macOS is optional; broken installs still fail.
+        if sys.platform != 'darwin' or exc.name != 'triton':
+            raise
         versions += ', triton (absent)'
     return versions
 
