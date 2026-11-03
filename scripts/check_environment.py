@@ -30,33 +30,43 @@ def python_check():
     return f'{platform.system()} {platform.machine()}, Python {platform.python_version()}'
 
 
-def cuda_check():
+def device_check():
+    """The device hairdeck.dev.select() picks (HAIRDECK_DEVICE), and a bf16 matmul on it."""
+    from hairdeck import dev
     import torch
     import torchvision
-    if not torch.cuda.is_available():
-        raise RuntimeError('CUDA is unavailable. Install the NVIDIA driver and CUDA-enabled PyTorch; '
-                           'on Windows run scripts/setup/windows.ps1.')
-    major, minor = torch.cuda.get_device_capability()
-    if sys.platform == 'win32' and major < 8:
-        raise RuntimeError('The pinned Windows Triton/bfloat16 setup requires an Ampere-or-newer NVIDIA GPU '
-                           '(compute capability 8.0+).')
-    if not torch.cuda.is_bf16_supported():
-        raise RuntimeError('This pipeline uses bfloat16; the current GPU/PyTorch combination does not support it.')
-    x = torch.ones((16, 16), device='cuda', dtype=torch.bfloat16)
+    device = dev.select()
+    if device.type == 'cpu' and not torch.cuda.is_available() and not torch.backends.mps.is_available():
+        raise RuntimeError('No CUDA or Apple MPS device: install the CUDA PyTorch build, or set HAIRDECK_DEVICE=cpu (very slow).')
+    x = torch.ones((16, 16), device=device, dtype=torch.bfloat16)
     y = x @ x
-    torch.cuda.synchronize()
+    dev.sync(device)
     if not bool(torch.isfinite(y).all()):
-        raise RuntimeError('CUDA bfloat16 operation returned non-finite values.')
-    props = torch.cuda.get_device_properties(torch.cuda.current_device())
-    return (f'torch {torch.__version__}, torchvision {torchvision.__version__}, CUDA {torch.version.cuda}; '
-            f'{props.name}, {props.total_memory / 2**30:.1f} GiB, capability {major}.{minor}.')
+        raise RuntimeError(f'bfloat16 matmul on {device} returned non-finite values.')
+    if device.type == 'cuda':
+        props = torch.cuda.get_device_properties(torch.cuda.current_device())
+        name = props.name
+        mem = f'{props.total_memory / 2**30:.1f} GiB'
+    else:
+        name, mem = ('Apple MPS', 'unified memory') if device.type == 'mps' else ('CPU', 'system memory')
+    return f'torch {torch.__version__}, torchvision {torchvision.__version__}; {device.type}: {name}, {mem}.'
 
 
 def dependency_check():
     names = ('gradio', 'pyrender', 'PyOpenGL', 'numpy', 'transformers', 'huggingface-hub')
-    versions = ', '.join(f'{name} {importlib.metadata.version(name)}' for name in names)
-    import triton
-    return versions + f', triton {triton.__version__}'
+
+    def version(name):  # gradio only for the demo, pyrender only for the previews
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            return 'absent'
+    versions = ', '.join(f'{name} {version(name)}' for name in names)
+    try:
+        import triton
+        versions += f', triton {triton.__version__}'
+    except ModuleNotFoundError:  # absent on macOS, where SAM 3 only needs the import (hairdeck/vendor/triton)
+        versions += ', triton (absent)'
+    return versions
 
 
 def assets_check():
@@ -136,7 +146,7 @@ def main():
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--json', dest='report', help='save an environment report')
     args = parser.parse_args()
-    checks = [('Python', python_check), ('CUDA / bfloat16', cuda_check), ('Dependencies', dependency_check)]
+    checks = [('Python', python_check), ('Device / bfloat16', device_check), ('Dependencies', dependency_check)]
     if args.assets:
         checks += [('Downloaded assets', assets_check), ('SAM 3 import', sam3_check), ('Blender / VRM', blender_check)]
     if args.render:

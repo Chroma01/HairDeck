@@ -9,10 +9,21 @@ import sys
 
 import torch
 
-from .. import paths
+from .. import dev, paths
+
+
+def _triton_stub():
+    """macOS has no Triton wheels; SAM 3 imports Triton at import time even with compilation off (hairdeck/vendor)."""
+    if sys.platform != 'darwin':  # other platforms keep their own Triton (or their own import error)
+        return
+    try:
+        import triton  # noqa: F401
+    except ModuleNotFoundError:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'vendor'))
 
 
 def _sam3():
+    _triton_stub()
     try:
         try:
             __import__('sam3')
@@ -39,8 +50,9 @@ def _sam3():
     return FindStage, Sam3Processor, build_sam3_image_model
 
 
-def load_model(compile=False, device='cuda', inference_device=None):
+def load_model(compile=False, device=None, inference_device=None):
     """Build weights on device; keep processor tensors on the inference device during CPU offload."""
+    device = dev.select(device)
     _, Sam3Processor, build_sam3_image_model = _sam3()
     model = build_sam3_image_model(checkpoint_path=paths.weights('sam3', 'sam3.pt'), load_from_HF=False, compile=compile,
                                   device=str(device))
@@ -49,16 +61,18 @@ def load_model(compile=False, device='cuda', inference_device=None):
 
 
 @torch.inference_mode()
-def text_feats(model, prompts, device='cuda'):
-    with torch.autocast('cuda', dtype=torch.bfloat16):
+def text_feats(model, prompts, device=None):
+    device = dev.select(device)
+    with dev.amp(device):
         return model.backbone.forward_text(prompts, device=str(device))
 
 
 @torch.inference_mode()
-def ground(model, state, tf, idx, device='cuda'):
+def ground(model, state, tf, idx, device=None):
     """Grounding for the prompts idx (indices into tf) on the image in state; returns probs (P, Q), boxes (P, Q, 4)
     cxcywh normalised, mask logits (P, Q, h, w)."""
     FindStage = _sam3()[0]
+    device = dev.select(device)
     n = len(idx)
     bo = dict(state['backbone_out'])
     bo['language_features'] = tf['language_features'][:, idx]

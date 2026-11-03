@@ -7,6 +7,8 @@ import time
 
 import torch
 
+from .. import dev
+
 GIB = 2 ** 30
 
 
@@ -33,8 +35,8 @@ class ModelResidency:
     Windows defaults to auto; Linux and ZeroGPU retain their existing default behavior.
     Caller must serialize requests (the demo already holds GPU_LOCK).
     """
-    def __init__(self, device='cuda', mode=None, zero_gpu=False):
-        self.device = torch.device(device)
+    def __init__(self, device=None, mode=None, zero_gpu=False):
+        self.device = dev.select(device)
         self.mode = mode or os.environ.get('HAIRDECK_OFFLOAD', 'auto' if sys.platform == 'win32' else 'off')
         if self.mode not in ('auto', 'on', 'off'):
             raise ValueError('HAIRDECK_OFFLOAD must be auto, on or off')

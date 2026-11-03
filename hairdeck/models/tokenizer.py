@@ -10,11 +10,12 @@ import os
 import numpy as np
 import torch
 
-from .. import paths
+from .. import dev, paths
 
 
 class LatentTokenizer:
-    def __init__(self, stats, lstats, device='cuda'):
+    def __init__(self, stats, lstats, device=None):
+        device = dev.select(device)
         self.s = {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in stats.items()}
         self.lmu = torch.as_tensor(lstats['mu'], dtype=torch.float32, device=device)
         self.lsd = torch.as_tensor(lstats['sd'], dtype=torch.float32, device=device)
@@ -56,7 +57,7 @@ def compute_stats(cards):
                 logn_mu=np.log(n[idx]).mean(), logn_sd=np.log(n[idx]).std())
 
 
-def build_tokenizer(vae, head=False, train_ds=None, device='cuda'):
+def build_tokenizer(vae, head=False, train_ds=None, device=None):
     """Tokenizer for card-VAE `vae` (a checkpoint directory name under the checkpoint root).
     Dataset frame (the point-cloud model): data/token_stats.json (computed from train_ds and written if missing) and
     ckpt/<vae>/latent_stats.json. Head frame (head=True; the image model and the chain model):

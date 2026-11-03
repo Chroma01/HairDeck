@@ -78,6 +78,8 @@ VRM_ADDON = ('https://github.com/saturday06/VRM-Addon-for-Blender/releases/downl
 CHARM_PC = ('hyz317/CHARM', '2515ec969b6de4b32e1b6f011ede89b2a889ced9')  # dataset repository, revision
 DORA_SHA256 = '8ff217e936c8ba3cf8164b7715785ca4d197b0425f1239ee0ad9f65b8ba7cd95'  # the converted safetensors file
 TEST_LISTS = ('test_pc_orig_idx.json', 'test_pc_orig_idx_all.json', 'test_idxs_rendered.json', 'test_keys.txt')
+# the managed Blender install is Linux/Windows x64 only: on macOS the downloader logs how to point HAIRDECK_BLENDER at
+# an existing Blender 4.2 LTS (only VRM export and the turn preview use Blender)
 DEFAULT = ('hairdeck', 'birefnet', 'sam3', 'sam3_src', 'dinov3_src', 'dinov3', 'blender')
 ITEMS = DEFAULT + ('test_data', 'charm_test_pc', 'dora')
 
@@ -388,7 +390,12 @@ def get_blender(root, a):
     if os.environ.get('HAIRDECK_BLENDER', '').strip():
         log('using HAIRDECK_BLENDER; skipped managed Blender install. Enable the VRM Add-on in that Blender first.')
         return
-    url, want, top, executable = blender_build()
+    try:
+        url, want, top, executable = blender_build()
+    except RuntimeError as e:  # no managed build for this platform (macOS): the GLB output works without Blender
+        log(f'{e} Skipping the managed install; set HAIRDECK_BLENDER to an existing Blender 4.2 LTS with the VRM Add-on '
+            'for VRM export and the turn preview.')
+        return
     B = os.path.join(root, 'third_party', 'blender')
     os.makedirs(B, exist_ok=True)
     binary = os.path.join(B, top, executable)
@@ -454,6 +461,11 @@ def main():
             failed.append(item)
     if failed:
         sys.exit(f'not ready: {failed}')
+    if sys.platform == 'darwin' and 'sam3_src' in a.only:  # SAM 3 hardcodes "cuda" in a few construction paths
+        r = subprocess.run([sys.executable, os.path.join(HERE, 'patch_sam3_mps.py')])
+        if r.returncode:
+            sys.exit('patch_sam3_mps.py failed')
+
     log('ALL_READY', root)
 
 

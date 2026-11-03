@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .. import paths
+from .. import dev, paths
 from ..ckpt import load as load_ckpt, vae_file
 from .codec import resample
 from .packed import Packed
@@ -24,9 +24,9 @@ from .packed import Packed
 BUCKETS = [16, 24, 32, 48, 64, 96, 128]  # length buckets for training batches
 
 
-def _amp(enabled):
-    """bf16 autocast on CUDA (a no-op for CPU tensors, as in the original code)."""
-    return torch.autocast('cuda', dtype=torch.bfloat16, enabled=bool(enabled) and torch.cuda.is_available())
+def _amp(enabled, device):
+    """bf16 autocast on CUDA or MPS (a no-op for CPU tensors, as in the original code)."""
+    return dev.amp(device, bool(enabled))
 
 
 # ---------------------------------------------------------------- data helpers
@@ -198,7 +198,7 @@ class CardVAE(nn.Module):
         c = self.from_z(z)
         h = self.q_in(self.four(u)) + c[:, None]
         h = self.dec(h, c, mask) if self.dec_type == 'ada' else self.dec(h, src_key_padding_mask=~mask)
-        with torch.autocast('cuda', enabled=False):
+        with dev.amp(h.device, enabled=False):
             o = self.out(self.norm(h.float()))
             if not self.integ:
                 return o
@@ -213,7 +213,8 @@ class LoadedVAE:
     """A trained card VAE (ckpt directory with model.safetensors or model.pt + stats.json): encode padded cards, decode
     latents to cards."""
 
-    def __init__(self, vae_dir, device='cuda'):
+    def __init__(self, vae_dir, device=None):
+        device = dev.select(device)
         ck = load_ckpt(vae_file(vae_dir))
         a = ck['args']
         self.model = CardVAE(a['L'], a['dim'], a['depth'], 8, a['zdim'], a.get('nf', 16), a.get('dec', 'tf'), a.get('integ', False)).to(device).eval()
@@ -235,7 +236,7 @@ class LoadedVAE:
             u = torch.from_numpy(U[s:s + bs]).to(self.device)
             n = torch.from_numpy(lens[s:s + bs]).to(self.device)
             mask = ar[None] < n[:, None]
-            with _amp(self.bf16):
+            with _amp(self.bf16, self.device):
                 mu, _ = self.model.encode(self.norm.fwd(x) * mask[..., None], u, mask)
             out[s:s + bs] = mu.float().cpu().numpy()
         return out
@@ -248,7 +249,7 @@ class LoadedVAE:
         ar = torch.arange(self.L, device=z.device)
         mask = ar[None] < ns[:, None]
         u = (ar[None].float() / (ns[:, None].float() - 1).clamp(min=1)).clamp(max=1.0) * mask
-        with _amp(self.bf16):
+        with _amp(self.bf16, self.device):
             feat = self.model.decode(z, u, mask)
         feat = self.norm.inv(feat.float()).cpu().numpy().astype(np.float64)
         ns = ns.cpu().numpy()
@@ -261,6 +262,6 @@ class LoadedVAE:
         return out
 
 
-def load_vae(vae_dir, device='cuda'):
+def load_vae(vae_dir, device=None):
     """Load a card VAE checkpoint directory (model.safetensors or model.pt with 'model' and 'args', stats.json)."""
     return LoadedVAE(vae_dir, device)

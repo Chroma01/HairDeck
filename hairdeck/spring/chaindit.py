@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .. import paths
+from .. import dev, paths
 from ..ckpt import load as load_ckpt
 from ..models.setdit import SetDiT
 from ..models.tokenizer import build_tokenizer
@@ -131,10 +131,11 @@ def chains_head_to_dataset(chains, k, b):
     return chains
 
 
-def load_chain_dit(ckpt_path, dev='cuda'):
+def load_chain_dit(ckpt_path, device=None):
     """(model, run args dict, token dim) of a chain DiT checkpoint (EMA weights)."""
+    device = dev.select(device)
     ck = load_ckpt(ckpt_path)
     ra = ck['args']
-    model = ChainDiT(ck['dim'], ra['dim'], ra['depth'], ra['heads']).to(dev).eval()
+    model = ChainDiT(ck['dim'], ra['dim'], ra['depth'], ra['heads']).to(device).eval()
     model.load_state_dict(ck['ema'])
     return model, ra, ck['dim']

@@ -30,7 +30,7 @@ import numpy as np
 import torch
 from PIL import Image, ImageOps
 
-from .. import paths
+from .. import dev, paths
 from ..cards.mesh import cards_to_json
 from ..ckpt import load as load_ckpt
 from ..cards.tokens import LatentDecoder, clean_tokens, tokens_to_cards
@@ -120,13 +120,14 @@ def load_image(image, want_path=False):
 
 
 class Pipeline:
-    def __init__(self, ckpt=None, chain_ckpt=None, device='cuda', preprocessor=None, chains=True, out_root=None,
+    def __init__(self, ckpt=None, chain_ckpt=None, device=None, preprocessor=None, chains=True, out_root=None,
                  offload=None):
         """ckpt / chain_ckpt: the image DiT and the chain DiT (default: IMAGE_DIT and CHAIN_DIT under paths.ckpt());
         preprocessor: any callable with Preprocessor's call and result (default: Preprocessor('best')); out_root: where
         run() puts a result without an out_dir (default results/image_to_hair);
-        offload: auto/on/off, otherwise HAIRDECK_OFFLOAD (Windows auto, Linux off)."""
-        self.dev = device
+        offload: auto/on/off, otherwise HAIRDECK_OFFLOAD (Windows auto, Linux off);
+        device: otherwise HAIRDECK_DEVICE (hairdeck.dev.select: favour -> CUDA, else MPS, else CPU)."""
+        self.dev = device = dev.select(device)
         self.out_root = out_root or paths.results('image_to_hair')
         t0 = time.time()
         self.residency = ModelResidency(device, offload, zero_gpu=ZERO_GPU)
@@ -138,13 +139,13 @@ class Pipeline:
         assert a.rep == 'rgb', a.rep
         self.a = a
         self.tok = LatentTokenizer(json.load(open(paths.data('token_stats_head.json'))),
-                                   json.load(open(paths.ckpt(a.vae, 'latent_stats_head.json'))), device=device)
+                                   json.load(open(paths.ckpt(a.vae, 'latent_stats_head.json'))), device=self.dev)
         self.enc = DinoEncoder(a.dino, a.res).to(initial_device)
         self.model = ImgSetDiT(self.tok.dim, a.dim, a.depth, a.heads, enc_dim=self.enc.dim,
                                n_ctx=self.enc.n_tokens).to(initial_device).eval()
         self.model.load_state_dict(ck['ema'])
         del ck
-        self.vae = LatentDecoder(paths.ckpt(a.vae), device)
+        self.vae = LatentDecoder(paths.ckpt(a.vae), self.dev)
         self.head = head_trimesh()
         self.ckpt = ckpt
         self.chain, self.chain_error = None, None
@@ -161,7 +162,7 @@ class Pipeline:
                 self.chain_error = f'{type(e).__name__}: {e}'
         self.residency.register('generation', self.enc, self.model, self.vae.vae.model, self.chain)
         if not ZERO_GPU:  # ZeroGPU: models are placed on cuda while no real GPU is attached (CUDA emulation)
-            torch.cuda.synchronize(self.dev)
+            dev.sync(self.dev)
         self.load_sec = round(time.time() - t0, 1)
 
     # ------------------------------------------------------------ stages
@@ -179,14 +180,14 @@ class Pipeline:
 
     def noise(self, seed):
         """The initial noise of fm_sample for one image, from a generator seeded `seed`."""
-        g = torch.Generator(device=self.dev).manual_seed(int(seed))
-        return torch.randn(1, self.a.nmax, self.tok.dim, device=self.dev, generator=g)
+        g = dev.generator(self.dev, seed)
+        return dev.randn((1, self.a.nmax, self.tok.dim), self.dev, g)
 
     def sample(self, crop, x0, steps, cfg):
         """-> (cards, raw card tokens (1, 192, 40))"""
         self.residency.activate('generation')
         img = torch.from_numpy(crop.copy()).permute(2, 0, 1)[None].to(self.dev)
-        with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
+        with torch.no_grad(), dev.amp(self.dev):
             ctx = self.model.encode_cond(self.enc(img))
             x = euler_cfg(self.model, ctx, x0, steps, cfg)
         return tokens_to_cards(self.tok, x, self.vae, fix=True)[0], x
@@ -195,8 +196,8 @@ class Pipeline:
         """Spring-bone chains for generated card tokens x: the chain DiT, Euler 50, CFG 2, its own generator seeded with
         the card seed, head frame -> list of dict(path, joints, n_joints, stiffness)."""
         self.residency.activate('generation')
-        g = torch.Generator(device=self.dev).manual_seed(int(seed))
-        with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
+        g = dev.generator(self.dev, seed)
+        with torch.no_grad(), dev.amp(self.dev):
             ctx = self.chain.encode_cond(clean_tokens(self.tok, x.float()))
             xc = fm_sample(self.chain, ctx, 48, self.chain_dim, steps, cfg, 1.0, g, 'euler')
         return self.chain_decode(xc[0].float().cpu().numpy(), self.chain_stats)
@@ -236,7 +237,7 @@ class Pipeline:
         most 4); out_dir (default <out_root>/<time>_<id>) gets the files listed in the module docstring;
         prep: another preprocessor for this call"""
         T = {}
-        sync = lambda: torch.cuda.synchronize(self.dev)
+        sync = lambda: dev.sync(self.dev)
         t_all = time.time()
         rgb, alpha, size_note, src = load_image(image, want_path=True)
         backend = prep or self.preprocessor

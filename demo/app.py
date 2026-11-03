@@ -654,7 +654,8 @@ def main():
     PORT = a.port
     log('loading pipeline, GPU', os.environ.get('CUDA_VISIBLE_DEVICES'))
     P = PL.Pipeline(out_root=OUT_ROOT)
-    log('loaded in', P.load_sec, 's; GPU memory', '-' if PL.ZERO_GPU else round(torch.cuda.memory_allocated() / 2 ** 30, 2),
+    log('loaded in', P.load_sec, 's; GPU memory', '-' if PL.ZERO_GPU or not torch.cuda.is_available()
+        else round(torch.cuda.memory_allocated() / 2 ** 30, 2),
         'GB; chains', 'on' if P.chain is not None else f'off ({P.chain_error})')
     if not a.no_warmup and EXAMPLES and not PL.ZERO_GPU:  # on ZeroGPU there is no GPU outside the @spaces.GPU calls
         r = P.run(EXAMPLES[0], seed=0, steps=10, cfg=2.0, write=False)

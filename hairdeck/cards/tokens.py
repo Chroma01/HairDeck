@@ -14,7 +14,7 @@ from .vae import load_vae
 
 
 class LatentDecoder:
-    def __init__(self, vae_dir, device='cuda'):
+    def __init__(self, vae_dir, device=None):
         self.vae = load_vae(vae_dir, device)
 
     @torch.no_grad()

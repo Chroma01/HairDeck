@@ -14,6 +14,7 @@ pillow==12.0.0
 opencv-python-headless==5.0.0.93
 safetensors==0.8.0
 huggingface_hub>=1.16
+certifi  # scripts/setup/download_weights.py: CA certificates for Pythons without system ones (macOS python.org builds)
 # SAM 3 and its imports
 setuptools==80.9.0  # pkg_resources, imported by SAM 3's model builder; newer setuptools dropped it
 timm==1.0.22

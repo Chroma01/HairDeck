@@ -12,7 +12,7 @@ import types
 import torch
 import torch.nn.functional as F
 
-from .. import paths
+from .. import dev, paths
 
 
 def _load_module(path, name):
@@ -24,8 +24,9 @@ def _load_module(path, name):
 
 
 class BiRefNet:
-    def __init__(self, name='birefnet_matting', size=1024, device='cuda', inference_device=None):
+    def __init__(self, name='birefnet_matting', size=1024, device=None, inference_device=None):
         # Model storage may start on CPU; small buffers and inputs use the selected GPU.
+        device = dev.select(device)
         self.device = torch.device(device if inference_device is None else inference_device)
         code_dir = paths.weights(name)
         pkg = f'birefnet_pkg_{name}'  # birefnet.py does `from .BiRefNet_config import ...`
@@ -53,7 +54,7 @@ class BiRefNet:
         return F.interpolate(a, (h0, w0), mode='bilinear', align_corners=False)[0, 0]
 
 
-def build(name, size, device='cuda', inference_device=None):
+def build(name, size, device=None, inference_device=None):
     if name != 'birefnet_matting':
         raise ValueError(f'matting model {name!r}: the release has birefnet_matting only')
     return BiRefNet(name, size or 1024, device=device, inference_device=inference_device)

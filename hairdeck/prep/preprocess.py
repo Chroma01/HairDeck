@@ -24,6 +24,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageFilter
 
+from .. import dev
 from ..data.crop import crop_box, union
 from . import recipe
 from .matte import build as build_matte
@@ -109,7 +110,7 @@ class Prep:
         ts += [x for x in (c['face_fallback'], c['hair_fallback']) if x > 0]
         self.t_min = min(ts)
         self.residency = residency
-        self.device = torch.device(residency.device if residency is not None else 'cuda')
+        self.device = torch.device(residency.device) if residency is not None else dev.select()
         initial_device = residency.initial_device if residency is not None else self.device
         self.model, self.proc = load_model(compile, device=initial_device, inference_device=self.device)
         self._tf = None  # the prompts' text features, made at the first use (property tf)
@@ -137,7 +138,7 @@ class Prep:
         into a working-res canvas of the full image."""
         if self.residency is not None:
             self.residency.activate('sam3')
-        with torch.autocast('cuda', dtype=torch.bfloat16):
+        with dev.amp(self.device):
             st = self.proc.set_image(im)
             pr, bx, mk = ground(self.model, st, self.tf, [self.prompts.index(p) for p in prompts],
                                 device=self.device)
@@ -171,7 +172,7 @@ class Prep:
         H, W = rgb.shape[:2]
         s = min(1.0, self.wr / max(H, W))
         shape = (max(1, round(H * s)), max(1, round(W * s)))
-        torch.cuda.synchronize(self.device)
+        dev.sync(self.device)
         t0 = time.time()
         im_s = im.filter(ImageFilter.GaussianBlur(self.sam_blur)) if self.sam_blur > 0 else im
         if self.sam_max > 0 and max(im_s.size) > self.sam_max:
@@ -198,7 +199,7 @@ class Prep:
                 cw, ch = max(1, int(round((x1 - x0) * s))), max(1, int(round((y1 - y0) * s)))
                 inst_c, logits_c = self._sam(cim, self.crop_prompts, shape, paste=(X0, Y0, cw, ch))
                 cbox, crop_px = (X0, Y0, X0 + cw, Y0 + ch), (x0, y0, x1, y1)
-        torch.cuda.synchronize(self.device)
+        dev.sync(self.device)
         t1 = time.time()
         T['sam3'] = t1 - t0
         alpha = None
@@ -207,7 +208,7 @@ class Prep:
                 self.residency.activate('matte')
             a = self.matte(np.asarray(im.filter(ImageFilter.GaussianBlur(self.matte_blur))) if self.matte_blur > 0 else rgb)
             alpha = F.interpolate(a[None, None], shape, mode='bilinear', align_corners=False)[0, 0].cpu().numpy()
-            torch.cuda.synchronize(self.device)
+            dev.sync(self.device)
         t2 = time.time()
         T['matte'] = t2 - t1
         pa, ph, pf, info = recipe.run(inst, shape, self.cfg, alpha, inst_crop=inst_c, crop_box=cbox)
@@ -244,7 +245,7 @@ class Prep:
         person = F.interpolate(torch.from_numpy(pa).to(self.device)[None, None], (H, W), mode='bilinear',
                                align_corners=False)[0, 0].clamp(0, 1)
         person = (person * 255).round().byte()
-        torch.cuda.synchronize(self.device)
+        dev.sync(self.device)
         T['full_res'] = time.time() - t3
         return person, hair, face, info, T
 
@@ -309,7 +310,7 @@ class Preprocessor:
             arr = np.concatenate([rgb, np.asarray(alpha)[..., None]], -1) if alpha is not None else rgb
             image_path = Image.fromarray(arr)
         r, person, hair, face = one(self.prep, image_path)
-        r['peak_gpu_gb'] = round(torch.cuda.max_memory_allocated(self.prep.device) / 2 ** 30, 2)
+        r['peak_gpu_gb'] = dev.peak_gb(self.prep.device)
         box = tuple(r['box']) if 'box' in r else None
         return dict(rgb=rgb, person=np.asarray(person, np.uint8), hair=np.asarray(hair, bool), face=np.asarray(face, bool),
                     box=None if box is None else tuple(float(v) for v in box), status=r['status'],

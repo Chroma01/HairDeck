@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import load_file
 
-from .. import paths
+from .. import dev, paths
 from ..ckpt import load as load_ckpt
 from .setdit import SetDiT
 from .tokenizer import build_tokenizer
@@ -80,7 +80,7 @@ class DinoEncoder(nn.Module):
         x = img.float() / 255
         if x.shape[-1] != self.res:
             x = F.interpolate(x, size=self.res, mode='bilinear', antialias=True)
-        with torch.autocast('cuda', dtype=torch.bfloat16):
+        with dev.amp(img.device):
             o = self.net.forward_features((x - self.mean) / self.std)
         # DINOv3 already applies the final norm to CLS, storage and patch tokens in forward_features
         out = torch.cat([o['x_norm_clstoken'][:, None], o['x_storage_tokens'], o['x_norm_patchtokens']], 1)
@@ -106,9 +106,10 @@ def build_img_model(a, tok_dim):
     return ImgSetDiT(tok_dim, a.dim, a.depth, a.heads, enc_dim=enc_dim, n_ctx=n_ctx)
 
 
-def load_img_dit(path, device='cuda'):
+def load_img_dit(path, device=None):
     """(model, head-frame tokenizer, run args) of an image DiT checkpoint (EMA weights; ema_XXXXXX.pt or
     model.safetensors)."""
+    device = dev.select(device)
     ck = load_ckpt(path)
     a = argparse.Namespace(**ck['args'])
     tok = build_tokenizer(a.vae, head=True, device=device)

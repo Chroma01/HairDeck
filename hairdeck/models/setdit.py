@@ -12,6 +12,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .. import dev
+
 
 class RMSNorm(nn.Module):
     def __init__(self, d, eps=1e-6):
@@ -126,7 +128,7 @@ class SetDiT(nn.Module):
         for b in self.blocks:
             h = b(h, c, ctx)
         # output head in fp32: under bf16 autocast the per-dim output would carry ~0.4% quantization noise
-        with torch.autocast('cuda', enabled=False):
+        with dev.amp(h.device, enabled=False):
             c, h = c.float(), h.float()
             sh, sc = self.f_ada(F.silu(c)).chunk(2, -1)
             return self.out(modulate(self.fn(h), sh, sc))

@@ -16,6 +16,7 @@
 
 ## 🔥 Updates
 
+- **[2026.11.03]** 🍎 Apple silicon support: HairDeck runs on MPS (same pipeline, no CUDA or Triton). [Get started](docs/macos.md).
 - **[2026.11.02]** 🎉 Windows support is here! Run HairDeck with local Gradio, VRM export and automatic model offload. [Get started](docs/windows.md).
 - **[2026.10.30]** 🎉 HairDeck is released! [Code](https://github.com/hyz317/HairDeck), [model weights](https://huggingface.co/hyz317/HairDeck) and the [online demo](https://huggingface.co/spaces/hyz317/HairDeck) are available.
 
@@ -47,9 +48,12 @@ The generated hairstyle can be exported as a GLB mesh or attached to an avatar a
 
 ### 🛠️ Installation
 
-HairDeck runs on Linux and native Windows with an NVIDIA CUDA GPU, Python 3.12, PyTorch 2.8 and CUDA 12.8.
+HairDeck runs on Linux and native Windows with an NVIDIA CUDA GPU, Python 3.12, PyTorch 2.8 and CUDA 12.8. Apple
+silicon Macs run it on MPS (see macOS below).
 
 **Windows:** Follow [Windows setup](docs/windows.md) to install the environment and launch Gradio.
+
+**macOS (Apple silicon):** Follow [macOS setup](docs/macos.md): the same pipeline runs on Apple MPS, without CUDA or Triton.
 
 **Linux:** Install the dependencies below and make `ffmpeg` available on your `PATH`.
 

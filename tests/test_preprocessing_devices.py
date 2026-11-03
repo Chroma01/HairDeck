@@ -12,6 +12,7 @@ from PIL import Image
 import torch
 import torch.nn.functional as F
 
+from hairdeck import dev
 from hairdeck.infer import image, memory
 from hairdeck.prep import matte, preprocess, sam3_ground
 
@@ -80,12 +81,13 @@ class PrepDeviceTests(unittest.TestCase):
                     self.assertEqual(str(call.kwargs['device']), expected_storage)
                     self.assertEqual(str(call.kwargs['inference_device']), 'cuda:1')
 
-    def test_standalone_prep_keeps_default_cuda(self):
+    def test_standalone_prep_keeps_default_device(self):
+        expected = str(dev.select())  # cuda off macOS (hairdeck.dev.DEFAULT); favour (MPS) on macOS
         with patch.object(preprocess, 'load_model', return_value=(Mock(), Mock())) as load:
             prep = preprocess.Prep({})
-        self.assertEqual(str(prep.device), 'cuda')
-        self.assertEqual(str(load.call_args.kwargs['device']), 'cuda')
-        self.assertEqual(str(load.call_args.kwargs['inference_device']), 'cuda')
+        self.assertEqual(str(prep.device), expected)
+        self.assertEqual(str(load.call_args.kwargs['device']), expected)
+        self.assertEqual(str(load.call_args.kwargs['inference_device']), expected)
 
     def test_sam_stage_keeps_runtime_device_for_prompts_and_crop_canvas(self):
         policy = types.SimpleNamespace(device=torch.device('cuda:1'), initial_device='cpu',

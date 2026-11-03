@@ -6,6 +6,8 @@ v = v_uncond + cfg * (v_cond - v_uncond), both evaluated in one doubled batch.
 """
 import torch
 
+from .. import dev
+
 
 def fm_loss(model, x1, ctx, wvec, p_drop=0.1, t_mode='logitnorm'):
     """Weighted MSE flow-matching loss; t ~ logit-normal (default) or uniform. wvec: per-token-dim weights."""
@@ -26,7 +28,7 @@ def fm_loss(model, x1, ctx, wvec, p_drop=0.1, t_mode='logitnorm'):
 def fm_sample(model, ctx, n_tokens, token_dim, steps=50, cfg=1.0, shift=1.0, generator=None, sampler='euler'):
     """Integrate from noise (t = 1) to data (t = 0) in `steps` uniform steps (optionally time-shifted); Euler or Heun."""
     B = ctx.shape[0]
-    x = torch.randn(B, n_tokens, token_dim, device=ctx.device, generator=generator)
+    x = dev.randn((B, n_tokens, token_dim), ctx.device, generator)
     ts = torch.linspace(1, 0, steps + 1, device=ctx.device)
     if shift != 1.0:
         ts = shift * ts / (1 + (shift - 1) * ts)
