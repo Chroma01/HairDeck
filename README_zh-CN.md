@@ -186,6 +186,12 @@ bash scripts/train/launch_color_dit.sh
 
 训练结果保存在 `ckpt/train_*`，与下载的预训练权重分开存放。当前图像训练代码包含 synthetic appearance augmentation。
 
+<a name="community"></a>
+
+## 🧩 社区
+
+- [ComfyUI-HairDeck](https://github.com/visualbruno/ComfyUI-HairDeck)（作者 [visualbruno](https://github.com/visualbruno)）：HairDeck 的 ComfyUI 节点，支持导出 GLB、带骨骼的 GLB 和 VRM，也支持 color model。
+
 <a name="citation"></a>
 
 ## 📝 引用

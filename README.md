@@ -189,6 +189,12 @@ bash scripts/train/launch_color_dit.sh
 
 The launchers write to `ckpt/train_*`, separately from the downloaded checkpoints. The image-training recipe includes synthetic appearance augmentation.
 
+<a name="community"></a>
+
+## 🧩 Community
+
+- [ComfyUI-HairDeck](https://github.com/visualbruno/ComfyUI-HairDeck) by [visualbruno](https://github.com/visualbruno): ComfyUI nodes for HairDeck, with GLB, rigged GLB and VRM export and the color model.
+
 <a name="citation"></a>
 
 ## 📝 Citation

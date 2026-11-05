@@ -185,6 +185,12 @@ bash scripts/train/launch_color_dit.sh
 
 学習結果は `ckpt/train_*` に保存され、ダウンロードしたチェックポイントとは別に管理されます。画像モデルの学習には synthetic appearance augmentation を使用します。
 
+<a name="community"></a>
+
+## 🧩 コミュニティ
+
+- [ComfyUI-HairDeck](https://github.com/visualbruno/ComfyUI-HairDeck)（作者：[visualbruno](https://github.com/visualbruno)）：HairDeck の ComfyUI ノードです。GLB、リグ付き GLB、VRM の出力と color model に対応しています。
+
 <a name="citation"></a>
 
 ## 📝 引用
