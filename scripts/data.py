@@ -1,4 +1,4 @@
-"""The training data of all models from the CHARM dataset and the characters' VRM files, in six steps run in order;
+"""The training data of all models from the CHARM dataset and the characters' VRM files, in seven steps run in order;
 every step skips the work whose outputs exist, so a stopped run continues where it stopped:
   cards         the index of the dataset (hairdeck.data.index), the card templates extracted from the original hair
                 meshes without CHARM code (hairdeck.cards.extract; bitwise the data the released models were trained
@@ -11,9 +11,12 @@ every step skips the work whose outputs exist, so a stopped run continues where 
                 p_head = k * p + b per hairstyle, the token stats in the head frame
   chains        the spring-bone chains of the VRM files (hairdeck.spring.vrm_spring) and their tokens in the head frame
                 (hairdeck.spring.chain_data)
+  colors        the colour model's targets (hairdeck.color.targets): per card the colours of the VRM materials, and the
+                colour every card shows in each render view (pyrender depth buffers: EGL, or OSMesa with
+                PYOPENGL_PLATFORM=osmesa)
 Then scripts/train/launch_vae.sh trains the card VAE and writes the card latents of both frames.
 
-python data.py DATASET_DIR VRM_DIR [VRM_DIR ...] [--steps cards,render_lists,renders,dora,head,chains] [--workers 12]
+python data.py DATASET_DIR VRM_DIR [VRM_DIR ...] [--steps cards,render_lists,renders,dora,head,chains,colors] [--workers 12]
        [--render_workers 8] [--device cuda]
 DATASET_DIR holds vroid-hair, vroid-hair-new and vroid-hair-tempconb (the id lists, hair.json, hair.glb and
 hair_reform.ply of every hairstyle); a VRM_DIR holds the VRM file of the character [prefix/]shard/id at
@@ -56,6 +59,13 @@ Needs the Dora-VAE 1.1 weights and Blender 4.2 LTS with the VRM Add-on for Blend
                                          / drag / hit, n_hair_verts); characters already in the file are skipped
                 spring/chains_{split}_head.npz, spring/chain_stats_head.json  the chain tokens in the head frame and
                                          their stats over the train chains
+  colors        color/targets_{split}.npz  per card of {split}_templates.npz and 16 bins along it: lab, lab_shade
+                                         (C, 16, 3) float32 CIELAB, n (C, 16) int32 (samples; 0: no target); per
+                                         hairstyle of {split}_cards_meta.json done, factors (every hair part matched a
+                                         VRM material), render_dE (H, 2) (the renders vs the lit / shade mix)
+                color/views/{split}_<shard>.npz  per hairstyle h with a head fit (hair): gt_<h> (C, 8, 16, 3) float16
+                                         Lab, nvis_<h> (C, 8, 16) uint16 (visible samples; 0: from the shading model),
+                                         views_<h> (8,) bool
 --steps: the steps to run (comma-separated). --workers: CPU processes. --render_workers: Blender processes (4 threads
 each, Blender restarted every 40 characters; a character in progress when Blender died or the run was stopped counts
 as failed). HAIRDECK_BLENDER: the command that runs Blender, split like a shell command line (default bash
@@ -94,7 +104,8 @@ from hairdeck.spring.vrm_spring import extract_record  # noqa: E402
 from hairdeck.vrm.export import blender_cmd  # noqa: E402
 
 SPLITS = ('train', 'test')
-STEPS = ('cards', 'render_lists', 'renders', 'dora', 'head', 'chains')
+STEPS = ('cards', 'render_lists', 'renders', 'dora', 'head', 'chains', 'colors')
+COLOR_SHARDS = 64  # the per-view colour targets are written in this many files
 LISTS = ('test_pc_orig_idx.json', 'test_pc_orig_idx_all.json', 'test_idxs_rendered.json', 'test_keys.txt')
 K = 64  # arc-length samples per card of the set DiT data
 HAIRS = {'train': 'train_cards_meta.json', 'test': 'test_meta.json'}  # the hairstyle orders of the head frame and chain data
@@ -473,6 +484,73 @@ def step_chains(workers):
     print('train chains', len(X), '| joints mean %.2f | stiffness mean %.2f' % (X[:, M * 3].mean(), X[:, M * 3 + 1].mean()), flush=True)
 
 
+# ----------------------------------------------------------------------------- colors
+def color_card(i):
+    from hairdeck.color.targets import card_targets
+    m = G['meta'][i]
+    if not os.path.isfile(os.path.join(m['dir'], 'hair.glb')):
+        return i, None
+    return i, card_targets(i, m['dir'], G['P'].cards(i), f"{G['rdir']}/{m['key'].replace('/', '_')}")
+
+
+def color_targets_split(split, workers):
+    from hairdeck.color.targets import BINS
+    meta = load(f'{split}_cards_meta.json')
+    P = Packed(paths.data(f'{split}_templates.npz'))
+    G.update(meta=meta, P=P, rdir=paths.data(RENDERS[split]))
+    C, Hn = len(P.card_ptr) - 1, len(P)
+    lab, lab_shade = np.zeros((C, BINS, 3), np.float32), np.zeros((C, BINS, 3), np.float32)
+    n = np.zeros((C, BINS), np.int32)
+    done, factors = np.zeros(Hn, bool), np.zeros(Hn, bool)
+    render_dE = np.full((Hn, 2), np.nan, np.float32)
+    with Pool(workers) as pool:
+        for i, r in pool.imap_unordered(color_card, range(Hn), chunksize=4):
+            if r is not None:
+                a, b = P.hair_ptr[i], P.hair_ptr[i + 1]
+                lab[a:b], lab_shade[a:b], n[a:b] = r['lab'], r['lab_shade'], r['n']
+                done[i], factors[i], render_dE[i] = True, r['factors'], r['render_dE']
+    save_npz(f'color/targets_{split}.npz', lab=lab, lab_shade=lab_shade, n=n, done=done, factors=factors,
+             render_dE=render_dE)
+    print(f'{split} colour targets: {int(done.sum())} of {Hn} hairstyles, VRM factors {factors[done].mean():.3f}', flush=True)
+
+
+def color_view_shard(shard):
+    from hairdeck.color.targets import view_targets
+    split, meta, fits = G['split'], G['meta'], G['fits']
+    fn = f'color/views/{split}_{shard:03d}.npz'
+    if have(fn):
+        return shard, None
+    res = {}
+    for i in range(shard, len(meta), COLOR_SHARDS):
+        m = meta[i]
+        rd = f"{G['rdir']}/{m['key'].replace('/', '_')}"
+        if m['key'] not in fits or not os.path.isfile(f'{rd}/meta.json'):
+            continue
+        try:
+            res[i] = view_targets(i, m['dir'], G['P'].cards(i), rd, fits[m['key']])
+        except Exception as e:  # noqa: BLE001  (a character without its VRM or hair mesh, ...)
+            print(f'{split} {i} colour views failed: {type(e).__name__}: {e}', flush=True)
+    hs = sorted(res)
+    save_npz(fn, hair=np.array(hs, np.int64), **{f'gt_{h}': res[h][0] for h in hs}, **{f'nvis_{h}': res[h][1] for h in hs},
+             **{f'views_{h}': res[h][2] for h in hs})
+    return shard, len(hs)
+
+
+def step_colors(workers):
+    os.environ.setdefault('PYOPENGL_PLATFORM', 'egl')
+    for split in SPLITS:
+        if have(f'color/targets_{split}.npz'):
+            print(f'color/targets_{split}.npz: kept', flush=True)
+        else:
+            color_targets_split(split, workers)
+        G.update(split=split, meta=load(f'{split}_cards_meta.json'), P=Packed(paths.data(f'{split}_templates.npz')),
+                 fits=load(f'head_params_{split}.json'), rdir=paths.data(RENDERS[split]))
+        os.makedirs(paths.data('color', 'views'), exist_ok=True)
+        with Pool(workers) as pool:
+            for shard, k in pool.imap_unordered(color_view_shard, range(COLOR_SHARDS)):
+                print(f'{split} colour views shard {shard}: ' + ('kept' if k is None else f'{k} hairstyles'), flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('dataset_dir')
@@ -488,7 +566,7 @@ def main():
     os.makedirs(paths.data(), exist_ok=True)
     run = dict(cards=lambda: step_cards(a.dataset_dir, a.workers), render_lists=lambda: step_render_lists(a.vrm_dirs),
                renders=lambda: step_renders(a.render_workers), dora=lambda: step_dora(a.workers, a.device),
-               head=lambda: step_head(a.workers), chains=lambda: step_chains(a.workers))
+               head=lambda: step_head(a.workers), chains=lambda: step_chains(a.workers), colors=lambda: step_colors(a.workers))
     for s in STEPS:
         if s in steps:
             t0 = time.time()

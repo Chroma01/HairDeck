@@ -78,7 +78,7 @@ def dependency_check():
 def assets_check():
     from hairdeck import paths
     config = json.loads((ROOT / 'configs/released_models.json').read_text(encoding='utf-8'))
-    names = [config[key]['checkpoint'] for key in ('card_vae', 'chain_dit', 'image_dit')]
+    names = [config[key]['checkpoint'] for key in ('card_vae', 'chain_dit', 'image_dit', 'color_dit')]
     names += config['inference_data']['files'] + config['avatar_body']['files']
     names += ['ckpt/card_vae/stats.json', 'ckpt/card_vae/latent_stats_head.json']
     files = [paths.resolve(name) for name in names]

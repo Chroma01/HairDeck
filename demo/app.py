@@ -309,10 +309,10 @@ def restore(show_head, show_chains, state, request: gr.Request):
 HEADER = f'''<header id="hdr">
   <h1>{TITLE}</h1>
   <nav class="project-links" aria-label="Project resources">
-    <a href="https://hyzcluster.github.io/HairDeck" target="_blank" rel="noopener noreferrer">Project Page</a>
-    <a href="https://huggingface.co/hyz317/HairDeck" target="_blank" rel="noopener noreferrer">Model</a>
-    <a href="https://github.com/hyz317/HairDeck" target="_blank" rel="noopener noreferrer">Code</a>
-    <a href="https://arxiv.org/abs/2610.40599" target="_blank" rel="noopener noreferrer">Paper</a>
+    <a href="https://hyzcluster.github.io/HairDeck" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Project-Page-426b92" alt="Project Page" height="20"></a>
+    <a href="https://huggingface.co/hyz317/HairDeck" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Models-Hugging%20Face-ffd21e" alt="Model" height="20"></a>
+    <a href="https://github.com/hyz317/HairDeck" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Code-GitHub-181717?logo=github" alt="Code" height="20"></a>
+    <a href="https://arxiv.org/abs/2610.40599" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/arXiv-2610.40599-b31b1b" alt="Paper: arXiv 2610.40599" height="20"></a>
   </nav>
 </header>'''
 FOOTER = '<footer id="ftr">For best results, use a clear portrait with the full hairstyle visible.</footer>'
@@ -322,11 +322,10 @@ CSS = """
 #app-shell {gap: 12px; padding: 14px 24px 10px; border: 0; background: transparent;}
 #hdr {padding: 0;}
 #hdr h1 {margin: 0; font-size: clamp(18px, 1.7vw, 22px); line-height: 1.25; font-weight: 700; color: #292136;}
-#hdr .project-links {display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 8px;}
-#hdr .project-links a, #hdr .project-links .is-pending {display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 9px; border: 1px solid #e4deed; border-radius: 8px; background: #fff; color: #765098; font-size: 12px; line-height: 1.4; font-weight: 600; text-decoration: none;}
-#hdr .project-links a:hover {background: #f3edf9; border-color: #cdb8e4;}
-#hdr .project-links .is-pending {color: #9c91a7; background: #faf8fd;}
-#hdr .project-links .soon {font-size: 10px; font-weight: 400;}
+#hdr .project-links {display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px;}
+#hdr .project-links a, #hdr .project-links .is-pending {display: inline-flex; padding: 0; border: 0; background: transparent; line-height: 1; text-decoration: none;}
+#hdr .project-links img {display: block; height: 20px; width: auto; max-width: none; margin: 0;}
+#hdr .project-links a:focus-visible {outline: 2px solid #9273b2; outline-offset: 3px; border-radius: 3px;}
 #workspace {display: grid !important; grid-template-columns: 320px minmax(0, 1fr); gap: 16px !important; align-items: start;}
 #workspace > .column {min-width: 0 !important; width: 100%;}
 #input-panel {gap: 10px; border: 1px solid #e4deed; border-radius: 16px; background: #fff; padding: 14px; box-shadow: 0 3px 14px #47315f05;}

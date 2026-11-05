@@ -16,6 +16,8 @@
 
 ## 🔥 Updates
 
+- **[2026.11.05]** 🎨 发片支持颜色了！color model 会预测每片发片沿长度方向的颜色，双色头发和发饰也能还原，GLB 和 VRM 导出都带颜色。可以在[在线 Demo](https://huggingface.co/spaces/hyz317/HairDeck)里试用。
+- **[2026.11.03]** 🍎 支持 Apple silicon：HairDeck 可以在 MPS 上运行（流程不变，不需要 CUDA 和 Triton）。[开始使用](docs/macos.md)。
 - **[2026.11.02]** 🎉 原生 Windows 支持已上线！可运行本地 Gradio、导出 VRM，并使用自动模型 offload。[开始使用](docs/windows.md)。
 - **[2026.10.30]** 🎉 HairDeck 正式发布！[代码](https://github.com/hyz317/HairDeck)和[模型权重](https://huggingface.co/hyz317/HairDeck)已开源，[在线 Demo](https://huggingface.co/spaces/hyz317/HairDeck)已上线。
 
@@ -29,7 +31,7 @@ https://github.com/user-attachments/assets/3eec4de5-ed21-4b75-b7d7-4bd599cbfeb2
 
 **输入一张角色图，HairDeck 就能生成可编辑的三维发型，并配上驱动头发摆动的弹簧骨骼链。**
 
-生成的发型由独立发片组成，每片都有自己的几何和 UV 坐标，方便继续逐片调整造型。生成结果可以导出为 GLB 网格，也可以绑定到角色后导出 VRM。
+生成的发型由独立发片组成，每片都有自己的几何和 UV 坐标，方便继续逐片调整造型。color model 会根据输入图预测每片发片沿长度方向的颜色，双色头发和发饰也能还原。生成结果可以导出为 GLB 网格，也可以绑定到角色后导出 VRM。
 
 模型用 Card VAE 编码每片头发，以一个 token 表示一整片发片，再由 set diffusion Transformer 一起生成整套发型。chain diffusion model 根据生成的发片预测弹簧骨骼链，随后通过蒙皮完成绑定，让头发随角色动作摆动。
 
@@ -116,7 +118,7 @@ python -m hairdeck.vrm.export results/my_character/character 0
 
 结果按输入图片名保存到 `OUT/<image name>/`，上例对应 `results/my_character/character/`。
 
-`--n` 指定生成数量（1–4），`--seed` 指定起始随机种子。加上 `--no-chains` 可以只生成发片。
+`--n` 指定生成数量（1–4），`--seed` 指定起始随机种子。加上 `--no-chains` 可以只生成发片，加上 `--no-colors` 则整套发型只用一种发色。
 
 如果使用其他模型权重，通过 `--ckpt` 和 `--chain_ckpt` 分别指定发片和骨骼链模型。两个模型需要基于同一个 Card VAE 训练。
 
@@ -142,9 +144,9 @@ results/my_character/character/
 ├── input.png                   # 输入图像
 ├── prep.png                    # 预处理掩码与裁剪结果
 ├── model_input.png             # 模型实际使用的裁剪图像
-├── cards_seed0.json             # 发片几何数据
+├── cards_seed0.json             # 发片几何和颜色
 ├── chains_seed0.json            # 生成的弹簧骨骼链
-├── hair_seed0.glb               # 发型，含 head proxy、各发片的 UV 和发色
+├── hair_seed0.glb               # 发型，含 head proxy、各发片的 UV 和颜色
 ├── hair_seed0_nohead.glb         # 不含 head proxy 的发型
 ├── info.json                    # 生成参数和结果信息
 ├── avatar_seed0.vrm             # 由 VRM 导出命令生成
@@ -179,6 +181,7 @@ python scripts/setup/download_weights.py --only dora test_data charm_test_pc
 python scripts/data.py DATASET_DIR VRM_DIR
 bash scripts/train/launch_vae.sh
 bash scripts/train/launch_pc_dit.sh && bash scripts/train/launch_img_dit.sh && bash scripts/train/launch_chain_dit.sh
+bash scripts/train/launch_color_dit.sh
 ```
 
 训练结果保存在 `ckpt/train_*`，与下载的预训练权重分开存放。当前图像训练代码包含 synthetic appearance augmentation。

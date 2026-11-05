@@ -16,6 +16,8 @@
 
 ## 🔥 Updates
 
+- **[2026.11.05]** 🎨 ヘアカードに色が付きました！color model が毛束ごとに長さ方向の色を予測し、ツートンの髪や髪飾りの色も再現します。GLB と VRM の出力にも色が入ります。[オンラインデモ](https://huggingface.co/spaces/hyz317/HairDeck)でお試しください。
+- **[2026.11.03]** 🍎 Apple silicon に対応しました！HairDeck が MPS で動きます（処理の流れは同じで、CUDA と Triton は不要です）。[セットアップ](docs/macos.md)
 - **[2026.11.02]** 🎉 Windows に対応しました！ローカルの Gradio デモ、VRM 出力、モデルの自動 offload が利用できます。[セットアップ](docs/windows.md)
 - **[2026.10.30]** 🎉 HairDeck をリリースしました！[コード](https://github.com/hyz317/HairDeck)・[モデルの重み](https://huggingface.co/hyz317/HairDeck)・[オンラインデモ](https://huggingface.co/spaces/hyz317/HairDeck)を公開しています。
 
@@ -34,6 +36,7 @@ https://github.com/user-attachments/assets/3eec4de5-ed21-4b75-b7d7-4bd599cbfeb2
 
 - **ヘアカードを集合として生成。** Card VAE が各カードをエンコードし、条件付き set diffusion モデルが髪型全体を生成します。
 - **UV 座標付きのジオメトリ。** 出力には個々の毛束が保持され、毛束ごとの UV 座標が含まれます。
+- **画像からの色。** color model が毛束ごとに長さ方向の色を予測し、ツートンの髪や髪飾りの色も再現します。
 - **スプリングボーンによるアニメーション。** chain diffusion model が毛束を動かすボーンを生成し、スキニングと VRM 出力に対応します。
 
 <p align="center">
@@ -113,7 +116,7 @@ python -m hairdeck.vrm.export results/my_character/character 0
 ```
 
 結果は `OUT/<image name>/` に保存されます。この例では `results/my_character/character/` です。
-`--n` では生成するバリエーション数を 1〜4 に指定でき、`--seed` では最初のシードを設定できます。毛束のメッシュのみを生成する場合は `--no-chains` を指定してください。
+`--n` では生成するバリエーション数を 1〜4 に指定でき、`--seed` では最初のシードを設定できます。毛束のメッシュのみを生成する場合は `--no-chains` を、髪全体を 1 色にする場合は `--no-colors` を指定してください。
 独自のモデルを使う場合は、`--ckpt` と、同じ Card VAE で学習した対応する `--chain_ckpt` を指定してください。
 
 <a name="local-demo"></a>
@@ -139,9 +142,9 @@ results/my_character/character/
 ├── input.png                   # 入力画像
 ├── prep.png                    # 前処理のマスクと切り抜き画像
 ├── model_input.png             # モデルに入力する切り抜き画像
-├── cards_seed0.json             # 毛束のジオメトリ
+├── cards_seed0.json             # 毛束のジオメトリと色
 ├── chains_seed0.json            # 生成されたスプリングボーンのチェーン
-├── hair_seed0.glb               # head proxy、毛束ごとの UV 座標、髪色を含む髪型
+├── hair_seed0.glb               # head proxy、毛束ごとの UV 座標と色を含む髪型
 ├── hair_seed0_nohead.glb         # head proxy を含まない髪型
 ├── info.json                    # 生成設定と結果のメタデータ
 ├── avatar_seed0.vrm             # VRM 出力コマンドで生成
@@ -177,6 +180,7 @@ python scripts/setup/download_weights.py --only dora test_data charm_test_pc
 python scripts/data.py DATASET_DIR VRM_DIR
 bash scripts/train/launch_vae.sh
 bash scripts/train/launch_pc_dit.sh && bash scripts/train/launch_img_dit.sh && bash scripts/train/launch_chain_dit.sh
+bash scripts/train/launch_color_dit.sh
 ```
 
 学習結果は `ckpt/train_*` に保存され、ダウンロードしたチェックポイントとは別に管理されます。画像モデルの学習には synthetic appearance augmentation を使用します。

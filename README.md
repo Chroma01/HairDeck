@@ -16,6 +16,7 @@
 
 ## 🔥 Updates
 
+- **[2026.11.05]** 🎨 Colored hair cards: a color model predicts the colors along every card, from two-tone hair to accessories, and the GLB and VRM exports carry them. Try it in the [online demo](https://huggingface.co/spaces/hyz317/HairDeck).
 - **[2026.11.03]** 🍎 Apple silicon support: HairDeck runs on MPS (same pipeline, no CUDA or Triton). [Get started](docs/macos.md).
 - **[2026.11.02]** 🎉 Windows support is here! Run HairDeck with local Gradio, VRM export and automatic model offload. [Get started](docs/windows.md).
 - **[2026.10.30]** 🎉 HairDeck is released! [Code](https://github.com/hyz317/HairDeck), [model weights](https://huggingface.co/hyz317/HairDeck) and the [online demo](https://huggingface.co/spaces/hyz317/HairDeck) are available.
@@ -34,6 +35,7 @@ The generated hairstyle can be exported as a GLB mesh or attached to an avatar a
 
 - **Hair cards as a set.** A card VAE encodes each card, and conditional set diffusion generates the hairstyle as a whole.
 - **Geometry with UVs.** The output preserves individual hair cards and provides per-card UV coordinates.
+- **Colors from the image.** A color model predicts the colors along every card, including two-tone hair and accessories.
 - **Spring-bone animation.** A chain diffusion model generates the bones that drive the cards, with skinning and VRM export.
 
 <p align="center">
@@ -118,7 +120,7 @@ python -m hairdeck.vrm.export results/my_character/character 0
 ```
 
 Results are written to `OUT/<image name>/`, here `results/my_character/character/`.
-`--n` accepts 1–4 variations; `--seed` sets the first seed. Use `--no-chains` to generate cards only.
+`--n` accepts 1–4 variations; `--seed` sets the first seed. Use `--no-chains` to generate cards only, and `--no-colors` for one hair color.
 For custom models, pass `--ckpt` and a matching `--chain_ckpt` trained with the same card VAE.
 
 <a name="local-demo"></a>
@@ -144,9 +146,9 @@ results/my_character/character/
 ├── input.png                   # Input image
 ├── prep.png                    # Preprocessing masks and crop
 ├── model_input.png             # Image crop used by the model
-├── cards_seed0.json             # Hair-card geometry
+├── cards_seed0.json             # Hair-card geometry and colors
 ├── chains_seed0.json            # Generated spring-bone chains
-├── hair_seed0.glb               # Hair with a head proxy, per-card UVs and hair color
+├── hair_seed0.glb               # Hair with a head proxy, per-card UVs and colors
 ├── hair_seed0_nohead.glb         # Hair without the head proxy
 ├── info.json                    # Generation settings and result metadata
 ├── avatar_seed0.vrm             # Created by the VRM export command
@@ -182,6 +184,7 @@ python scripts/setup/download_weights.py --only dora test_data charm_test_pc
 python scripts/data.py DATASET_DIR VRM_DIR
 bash scripts/train/launch_vae.sh
 bash scripts/train/launch_pc_dit.sh && bash scripts/train/launch_img_dit.sh && bash scripts/train/launch_chain_dit.sh
+bash scripts/train/launch_color_dit.sh
 ```
 
 The launchers write to `ckpt/train_*`, separately from the downloaded checkpoints. The image-training recipe includes synthetic appearance augmentation.
